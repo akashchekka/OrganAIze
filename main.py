@@ -50,11 +50,10 @@ def print_agent_tree(agents: list[dict], indent: int = 0) -> None:
 
             tokens = agent.get("token_usage", {})
             total_tokens = tokens.get("total_tokens", 0)
-            cost = tokens.get("cost_usd", 0)
 
             print(
                 f"{prefix}[{status_icon}] {agent['name']} "
-                f"(role={agent['role']}, tokens={total_tokens:,}, cost=${cost:.4f})"
+                f"(role={agent['role']}, tokens={total_tokens:,})"
             )
 
 
@@ -73,8 +72,7 @@ def print_summary(result: dict) -> None:
     print(f"Total output tokens: {summary['total_output_tokens']:,}")
     print(f"Total tokens:        {summary['total_tokens']:,}")
     print(f"Total LLM calls:     {summary['total_llm_calls']}")
-    print(f"Total cost:          ${summary['total_cost_usd']:.4f}")
-    print(f"Budget remaining:    ${summary['budget_remaining_usd']:.4f}")
+    print(f"Tokens remaining:    {summary['tokens_remaining']:,}")
 
     print(f"\n--- Agent Tree ---")
     print_agent_tree(result.get("agent_tree", []))
@@ -85,15 +83,15 @@ def print_summary(result: dict) -> None:
         print("\n...[output truncated]")
 
 
-async def async_main(goal: str, budget: float, model: str, verbose: bool) -> None:
+async def async_main(goal: str, max_tokens: int, model: str, verbose: bool) -> None:
     setup_logging(verbose=verbose)
     print(f"🧬 Evolve — Starting session")
-    print(f"   Goal:   {goal}")
-    print(f"   Budget: ${budget:.2f}")
-    print(f"   Model:  {model}")
+    print(f"   Goal:       {goal}")
+    print(f"   Max tokens: {max_tokens:,}")
+    print(f"   Model:      {model}")
     print()
 
-    genesis = GenesisAgent(session_budget_usd=budget, model=model)
+    genesis = GenesisAgent(max_session_tokens=max_tokens, model=model)
     result = await genesis.run(goal)
     print_summary(result)
 
@@ -105,10 +103,10 @@ def main():
     )
     parser.add_argument("goal", help="The user goal to achieve")
     parser.add_argument(
-        "--budget",
-        type=float,
-        default=5.00,
-        help="Session budget in USD (default: 5.00)",
+        "--max-tokens",
+        type=int,
+        default=500000,
+        help="Max total tokens for the session (default: 500000)",
     )
     parser.add_argument(
         "--model",
@@ -122,7 +120,7 @@ def main():
     )
 
     args = parser.parse_args()
-    asyncio.run(async_main(args.goal, args.budget, args.model, args.verbose))
+    asyncio.run(async_main(args.goal, args.max_tokens, args.model, args.verbose))
 
 
 if __name__ == "__main__":

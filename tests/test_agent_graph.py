@@ -38,7 +38,7 @@ class TestShouldContinue:
             "depth": 0, "model": "gpt-4o",
             "tools_allowed": [], "tools_denied": [],
             "final_output": "", "step_count": 5, "max_steps": 10,
-            "status": "budget_exhausted",
+            "status": "token_cap_exceeded",
         }
         assert should_continue(state) == "end"
 

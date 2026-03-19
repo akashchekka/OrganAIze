@@ -31,7 +31,7 @@ import litellm
 
 from config import MAX_CONCURRENT_LLM_CALLS, get_llm_kwargs
 from core.blueprint import AgentBlueprint, compile_system_prompt
-from core.cost_tracker import BudgetExhausted, CostTracker
+from core.cost_tracker import TokenCapExceeded, CostTracker
 from core.lifecycle import AgentExpired, AgentLifecycle
 from tracing.event_logger import EventLogger
 from tracing.event_types import (
@@ -98,7 +98,7 @@ async def reason_node(state: AgentState, *, config: dict) -> dict:
             logger.error("LLM call failed for %s: %s", state["agent_name"], e)
             return {"status": "completed", "final_output": f"[LLM_ERROR] {e}"}
 
-    # Track cost
+    # Track tokens
     usage = response.usage
     if usage:
         try:
@@ -110,9 +110,9 @@ async def reason_node(state: AgentState, *, config: dict) -> dict:
                 input_tokens=usage.prompt_tokens,
                 output_tokens=usage.completion_tokens,
             )
-        except BudgetExhausted as e:
-            logger.warning("Budget exhausted for %s: %s", state["agent_name"], e)
-            return {"status": "budget_exhausted", "final_output": f"[BUDGET_EXHAUSTED] {e}"}
+        except TokenCapExceeded as e:
+            logger.warning("Token cap exceeded for %s: %s", state["agent_name"], e)
+            return {"status": "token_cap_exceeded", "final_output": f"[TOKEN_CAP_EXCEEDED] {e}"}
 
     msg = response.choices[0].message
 
@@ -226,7 +226,7 @@ async def tool_node(state: AgentState, *, config: dict) -> dict:
 
 def should_continue(state: AgentState) -> str:
     """Route: if agent produced a final output or hit limits → end. Otherwise → tools."""
-    if state.get("status") in ("completed", "expired", "budget_exhausted"):
+    if state.get("status") in ("completed", "expired", "token_cap_exceeded"):
         return "end"
 
     last_msg = state["messages"][-1]
@@ -384,9 +384,9 @@ async def run_agent_graph(
             )
     elif status == "expired":
         pass  # lifecycle already handled in reason_node
-    elif status == "budget_exhausted":
-        await lifecycle.die(reason="budget_exhausted")
-        logger.warning("Agent %s died: budget exhausted", blueprint.name)
+    elif status == "token_cap_exceeded":
+        await lifecycle.die(reason="token_cap_exceeded")
+        logger.warning("Agent %s died: token cap exceeded", blueprint.name)
 
     await event_logger.log_event(
         session_id=session_id,

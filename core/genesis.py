@@ -22,10 +22,10 @@ from config import (
     GENESIS_SPAWN_BUDGET,
     MAX_DEPTH,
     MAX_GLOBAL_AGENTS,
+    MAX_SESSION_TOKENS,
     MONGO_DB_NAME,
     MONGO_URI,
     REDIS_URL,
-    SESSION_BUDGET_USD,
 )
 from core.agent import run_agent_graph
 from core.blueprint import (
@@ -55,12 +55,12 @@ class GenesisAgent:
 
     def __init__(
         self,
-        session_budget_usd: float = SESSION_BUDGET_USD,
+        max_session_tokens: int = MAX_SESSION_TOKENS,
         model: str = DEFAULT_LLM_MODEL,
     ):
         self.session_id = str(uuid.uuid4())
         self.model = model
-        self.session_budget_usd = session_budget_usd
+        self.max_session_tokens = max_session_tokens
 
         self._mongo_client: AsyncIOMotorClient | None = None
         self._redis: aioredis.Redis | None = None
@@ -89,7 +89,7 @@ class GenesisAgent:
             registry=self.registry,
             event_logger=self.event_logger,
             session_id=self.session_id,
-            budget_usd=self.session_budget_usd,
+            max_tokens=self.max_session_tokens,
         )
 
         spawn_lock = SpawnLock(self._redis)
@@ -118,8 +118,8 @@ class GenesisAgent:
         await self._init_infrastructure()
 
         try:
-            logger.info("Session %s started | goal='%s' | model=%s | budget=$%.2f",
-                        self.session_id, user_goal[:100], self.model, self.session_budget_usd)
+            logger.info("Session %s started | goal='%s' | model=%s | max_tokens=%d",
+                        self.session_id, user_goal[:100], self.model, self.max_session_tokens)
             # 1. Create the Genesis agent blueprint
             genesis_blueprint = AgentBlueprint(
                 name="Genesis-Orchestrator",
@@ -188,9 +188,9 @@ class GenesisAgent:
             # 3. Gather session summary
             token_summary = self.cost_tracker.get_session_summary()
             all_agents = await self.registry.get_session_agents(self.session_id)
-            logger.info("Session %s complete | agents=%d | cost=$%.4f | tokens=%d",
+            logger.info("Session %s complete | agents=%d | tokens=%d",
                         self.session_id, len(all_agents),
-                        token_summary["total_cost_usd"], token_summary["total_tokens"])
+                        token_summary["total_tokens"])
 
             return {
                 "output": output,

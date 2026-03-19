@@ -12,7 +12,7 @@ GENESIS_SPAWN_BUDGET = int(os.getenv("EVOLVE_GENESIS_BUDGET", "8"))
 MAX_CONCURRENT_LLM_CALLS = int(os.getenv("EVOLVE_MAX_CONCURRENT_LLM", "3"))
 
 # ── Session Budget ──────────────────────────────────────────────
-SESSION_BUDGET_USD = float(os.getenv("EVOLVE_SESSION_BUDGET_USD", "5.00"))
+MAX_SESSION_TOKENS = int(os.getenv("EVOLVE_MAX_SESSION_TOKENS", "500000"))  # Total token cap per session
 
 # ── TTL Defaults ────────────────────────────────────────────────
 DEFAULT_TTL_SECONDS = int(os.getenv("EVOLVE_DEFAULT_TTL", "300"))
@@ -55,32 +55,6 @@ LLM_API_KEY = os.getenv("EVOLVE_LLM_API_KEY", "")       # Fallback API key
 LLM_API_BASE = os.getenv("EVOLVE_LLM_API_BASE", "")     # Custom endpoint (Ollama, vLLM, etc.)
 LLM_API_VERSION = os.getenv("EVOLVE_LLM_API_VERSION", "")  # Azure API version
 
-# ── Model Pricing (per 1M tokens, USD) ──────────────────────────
-# Add your model here. Local models (Ollama) default to 0 cost.
-MODEL_PRICING: dict[str, dict[str, float]] = {
-    # OpenAI
-    "gpt-4o":         {"input": 2.50, "output": 10.00},
-    "gpt-4o-mini":    {"input": 0.15, "output": 0.60},
-    "gpt-4.1":        {"input": 2.00, "output": 8.00},
-    "gpt-4.1-mini":   {"input": 0.40, "output": 1.60},
-    "gpt-4.1-nano":   {"input": 0.10, "output": 0.40},
-    # Azure OpenAI (same pricing as OpenAI, prefix stripped for lookup)
-    "azure/gpt-4o":       {"input": 2.50, "output": 10.00},
-    "azure/gpt-4o-mini":  {"input": 0.15, "output": 0.60},
-    # Anthropic
-    "claude-opus-4-20250514":    {"input": 15.00, "output": 75.00},
-    "claude-sonnet-4-20250514":  {"input": 3.00, "output": 15.00},
-    "claude-haiku":   {"input": 0.25, "output": 1.25},
-    # Ollama / local (free)
-    "ollama/llama3":      {"input": 0.0, "output": 0.0},
-    "ollama/mistral":     {"input": 0.0, "output": 0.0},
-    "ollama/codellama":   {"input": 0.0, "output": 0.0},
-    "ollama/qwen2":       {"input": 0.0, "output": 0.0},
-}
-
-# Fallback pricing for unknown models
-FALLBACK_PRICING = {"input": 1.00, "output": 3.00}
-
 # ── Role → Default Model Mapping ───────────────────────────────
 ROLE_MODEL_DEFAULTS: dict[str, str] = {
     "orchestrator": "azure/gpt-4o",
@@ -96,16 +70,6 @@ ROLE_MODEL_DEFAULTS: dict[str, str] = {
 # ── Restricted Tools ────────────────────────────────────────────
 RESTRICTED_TOOLS = {"shell_exec", "file_delete", "network_request_external"}
 RESTRICTED_TOOLS_MAX_DEPTH = 1  # Only agents at depth <= this can use restricted tools
-
-
-def calculate_cost(model: str, input_tokens: int, output_tokens: int) -> float:
-    """Calculate USD cost for a single LLM call."""
-    pricing = MODEL_PRICING.get(model, FALLBACK_PRICING)
-    return (
-        (input_tokens / 1_000_000) * pricing["input"]
-        + (output_tokens / 1_000_000) * pricing["output"]
-    )
-
 
 def get_llm_kwargs(model: str | None = None) -> dict[str, Any]:
     """Build provider-aware kwargs for litellm.acompletion().
