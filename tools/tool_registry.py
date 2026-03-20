@@ -223,6 +223,7 @@ def get_tool_descriptions(allowed_tools: list[str]) -> list[dict]:
                         "success_criteria": {"type": "string", "description": "How to know the task is done"},
                         "output_format": {"type": "string", "description": "json|markdown|code|structured_report"},
                         "tools_needed": {"type": "array", "items": {"type": "string"}, "description": "Tools this agent needs"},
+                        "parallel": {"type": "boolean", "description": "If true (default), this spawn runs in parallel with other spawns in the same turn. Set to false when this agent's output is needed before spawning the next."},
                     },
                     "required": ["name", "role", "task", "success_criteria"],
                 },

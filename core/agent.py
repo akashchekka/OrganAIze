@@ -169,57 +169,124 @@ async def tool_node(state: AgentState, *, config: dict) -> dict:
     if not isinstance(last_msg, AIMessage) or not last_msg.tool_calls:
         return {}
 
-    tool_messages = []
+    # Separate spawn calls from other tools
+    spawn_calls = []
+    other_calls = []
     for tc in last_msg.tool_calls:
-        tool_name = tc["name"]
-        args = tc["args"]
+        if tc["name"] == "spawn_agent":
+            spawn_calls.append(tc)
+        else:
+            other_calls.append(tc)
 
-        try:
-            if tool_name == "share_finding":
-                await blackboard.share(args.get("key", "unknown"), args.get("value", ""))
-                result = {"tool": "share_finding", "status": "shared", "key": args.get("key")}
+    tool_messages = []
 
-            elif tool_name == "read_shared":
-                shared = await blackboard.read_shared(args.get("pattern", "*"))
-                simplified = {k.split(":")[-1]: v for k, v in shared.items()}
-                result = {"tool": "read_shared", "findings": simplified}
-
-            elif tool_name == "spawn_agent":
-                result = await _handle_spawn(args, blueprint, spawner, deps)
-
-            else:
-                result = await execute_tool(
-                    tool_name=tool_name,
-                    args=args,
-                    agent_tools_allowed=state["tools_allowed"],
-                    agent_tools_denied=state["tools_denied"],
-                    agent_depth=state["depth"],
-                )
-
-            await event_logger.log_event(
-                session_id=state["session_id"],
-                agent_id=state["agent_id"],
-                agent_name=state["agent_name"],
-                depth=state["depth"],
-                event_type=AGENT_TOOL_CALL,
-                payload={"tool_name": tool_name, "args": args, "result_preview": str(result)[:1000]},
-            )
-
-        except (ToolDenied, Exception) as e:
-            result = {"tool": tool_name, "error": str(e)}
-            logger.error("Tool %s failed for %s: %s", tool_name, state["agent_name"], e)
-            await event_logger.log_event(
-                session_id=state["session_id"],
-                agent_id=state["agent_id"],
-                agent_name=state["agent_name"],
-                depth=state["depth"],
-                event_type=AGENT_TOOL_ERROR,
-                payload={"tool_name": tool_name, "error": str(e)},
-            )
-
+    # Run non-spawn tools sequentially (order may matter)
+    for tc in other_calls:
+        result = await _execute_single_tool(tc, state, deps, blackboard)
         tool_messages.append(ToolMessage(content=json.dumps(result), tool_call_id=tc["id"]))
 
+    # Split spawns by parallel flag (LLM decides)
+    sequential_spawns = [tc for tc in spawn_calls if not tc["args"].get("parallel", True)]
+    parallel_spawns = [tc for tc in spawn_calls if tc["args"].get("parallel", True)]
+
+    # Run sequential spawns first, in order
+    for tc in sequential_spawns:
+        result = await _run_spawn_and_log(tc, state, deps, blueprint, spawner)
+        tool_messages.append(ToolMessage(content=json.dumps(result), tool_call_id=tc["id"]))
+
+    # Fan out parallel spawns
+    if parallel_spawns:
+        tasks = [
+            _run_spawn_and_log(tc, state, deps, blueprint, spawner)
+            for tc in parallel_spawns
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for tc, result in zip(parallel_spawns, results):
+            if isinstance(result, Exception):
+                logger.error("Parallel spawn failed for %s: %s", tc["args"].get("name"), result)
+                result = {"tool": "spawn_agent", "error": str(result)}
+            tool_messages.append(ToolMessage(content=json.dumps(result), tool_call_id=tc["id"]))
+
     return {"messages": tool_messages}
+
+
+async def _execute_single_tool(tc: dict, state: AgentState, deps: dict, blackboard: BlackboardClient) -> dict:
+    """Execute a single non-spawn tool call and log the result."""
+    event_logger: EventLogger = deps["event_logger"]
+    tool_name = tc["name"]
+    args = tc["args"]
+
+    try:
+        if tool_name == "share_finding":
+            await blackboard.share(args.get("key", "unknown"), args.get("value", ""))
+            result = {"tool": "share_finding", "status": "shared", "key": args.get("key")}
+
+        elif tool_name == "read_shared":
+            shared = await blackboard.read_shared(args.get("pattern", "*"))
+            simplified = {k.split(":")[-1]: v for k, v in shared.items()}
+            result = {"tool": "read_shared", "findings": simplified}
+
+        else:
+            result = await execute_tool(
+                tool_name=tool_name,
+                args=args,
+                agent_tools_allowed=state["tools_allowed"],
+                agent_tools_denied=state["tools_denied"],
+                agent_depth=state["depth"],
+            )
+
+        await event_logger.log_event(
+            session_id=state["session_id"],
+            agent_id=state["agent_id"],
+            agent_name=state["agent_name"],
+            depth=state["depth"],
+            event_type=AGENT_TOOL_CALL,
+            payload={"tool_name": tool_name, "args": args, "result_preview": str(result)[:1000]},
+        )
+
+    except (ToolDenied, Exception) as e:
+        result = {"tool": tool_name, "error": str(e)}
+        logger.error("Tool %s failed for %s: %s", tool_name, state["agent_name"], e)
+        await event_logger.log_event(
+            session_id=state["session_id"],
+            agent_id=state["agent_id"],
+            agent_name=state["agent_name"],
+            depth=state["depth"],
+            event_type=AGENT_TOOL_ERROR,
+            payload={"tool_name": tool_name, "error": str(e)},
+        )
+
+    return result
+
+
+async def _run_spawn_and_log(tc: dict, state: AgentState, deps: dict, blueprint: AgentBlueprint, spawner) -> dict:
+    """Execute a spawn_agent tool call and log the result."""
+    event_logger: EventLogger = deps["event_logger"]
+    args = tc["args"]
+
+    try:
+        result = await _handle_spawn(args, blueprint, spawner, deps)
+        await event_logger.log_event(
+            session_id=state["session_id"],
+            agent_id=state["agent_id"],
+            agent_name=state["agent_name"],
+            depth=state["depth"],
+            event_type=AGENT_TOOL_CALL,
+            payload={"tool_name": "spawn_agent", "args": args, "result_preview": str(result)[:1000]},
+        )
+    except Exception as e:
+        result = {"tool": "spawn_agent", "error": str(e)}
+        logger.error("spawn_agent failed for %s: %s", state["agent_name"], e)
+        await event_logger.log_event(
+            session_id=state["session_id"],
+            agent_id=state["agent_id"],
+            agent_name=state["agent_name"],
+            depth=state["depth"],
+            event_type=AGENT_TOOL_ERROR,
+            payload={"tool_name": "spawn_agent", "error": str(e)},
+        )
+
+    return result
 
 
 # ── Routing ─────────────────────────────────────────────────────
