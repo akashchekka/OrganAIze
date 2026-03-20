@@ -4,219 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Evolve</title>
-<style>
-*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-html{scroll-behavior:smooth;scrollbar-width:none;-ms-overflow-style:none}
-html::-webkit-scrollbar{display:none}
-body{
-  font-family:'Inter',system-ui,sans-serif;
-  background:#efedf1;
-  color:#1a1a1a;
-  line-height:1.7;
-  scrollbar-width:none;
-  -webkit-overflow-scrolling:touch;
-}
-body::-webkit-scrollbar{display:none}
-a{color:#1a1a1a}
-
-/* Nav */
-nav{
-  display:flex;align-items:center;justify-content:space-between;
-  padding:24px 48px;
-}
-.logo{font-size:1.1rem;font-weight:700;letter-spacing:-.02em}
-.nav-links{display:flex;gap:32px;list-style:none}
-.nav-links a{font-size:.875rem;color:#444;text-decoration:none}
-.nav-links a:hover{color:#1a1a1a}
-
-/* Container */
-.container{max-width:960px;margin:0 auto;padding:0 24px}
-
-/* Sections */
-section{padding:100px 0}
-section+section{border-top:none}
-
-/* Glass card for content sections */
-.glass{
-  background:rgba(239,237,241,.01);
-  backdrop-filter:blur(12px);
-  -webkit-backdrop-filter:blur(12px);
-  border:1px solid rgba(255,255,255,.5);
-  border-radius:24px;
-  padding:56px 48px;
-  margin-bottom:32px;
-  box-shadow:0 4px 30px rgba(0,0,0,.04);
-}
-
-/* Hero */
-.hero{padding:80px 0 100px}
-.hero .container{display:grid;grid-template-columns:1fr 1fr;gap:48px;align-items:center}
-.hero h1{
-  font-size:clamp(2.4rem,5vw,3.8rem);
-  font-weight:800;letter-spacing:-.03em;
-  line-height:1.1;margin-bottom:24px;
-}
-.hero p{
-  font-size:1.1rem;color:#444;
-  max-width:480px;margin-bottom:40px;
-}
-.hero-buttons{display:flex;gap:12px;flex-wrap:wrap}
-/* Hero animation */
-.hero-visual{display:none}
-#particle-canvas{
-  position:fixed;top:0;left:0;width:100%;height:100%;
-  z-index:0;pointer-events:none;
-}
-nav,.hero,.cta,footer{
-  position:relative;z-index:2;
-}
-section{position:relative}
-.glass{
-  position:relative;z-index:1;
-  isolation:isolate;
-}
-@media(max-width:768px){
-  .hero .container{grid-template-columns:1fr}
-}
-.btn{
-  padding:12px 28px;border-radius:8px;font-size:.9rem;font-weight:600;
-  border:none;cursor:pointer;text-decoration:none;display:inline-block;
-}
-.btn-dark{background:#1a1a1a;color:#fff}
-.btn-dark:hover{background:#333;color:#fff}
-.btn-outline{background:transparent;color:#1a1a1a;border:1.5px solid #1a1a1a}
-.btn-outline:hover{background:rgba(0,0,0,.05)}
-
-/* Terminal */
-.terminal{
-  max-width:620px;margin:48px auto 0;text-align:left;
-  background:#1a1a1a;border-radius:10px;overflow:hidden;
-}
-.terminal-bar{display:flex;gap:6px;padding:12px 16px;background:#111}
-.terminal-bar span{width:10px;height:10px;border-radius:50%;background:#333}
-.terminal-body{
-  padding:16px 20px;font-family:'JetBrains Mono',monospace;
-  font-size:.82rem;color:#aaa;line-height:1.8;
-}
-.terminal-body .g{color:#6ee7b7}
-.terminal-body .w{color:#e5e5e5}
-
-/* Feature list */
-.features{display:grid;grid-template-columns:1fr 1fr;gap:40px 60px}
-.feature h3{font-size:1rem;font-weight:700;margin-bottom:6px}
-.feature p{font-size:.9rem;color:#444}
-
-/* How it works */
-.steps{display:grid;grid-template-columns:repeat(4,1fr);gap:32px;text-align:center}
-.step-num{
-  width:40px;height:40px;border-radius:50%;
-  border:2px solid #1a1a1a;display:flex;align-items:center;justify-content:center;
-  font-weight:700;font-size:.95rem;margin:0 auto 14px;
-}
-.steps h3{font-size:.95rem;font-weight:700;margin-bottom:6px}
-.steps p{font-size:.85rem;color:#444}
-
-/* Use cases - connected words */
-.usecases-flow{
-  display:flex;align-items:center;justify-content:center;
-  flex-wrap:wrap;gap:0;padding:20px 0;
-}
-.uc-word{
-  font-size:1rem;font-weight:600;padding:10px 20px;
-  white-space:nowrap;
-}
-.uc-line{
-  width:40px;height:1.5px;background:#1a1a1a;flex-shrink:0;
-}
-@media(max-width:768px){
-  .uc-line{width:1.5px;height:24px}
-  .usecases-flow{flex-direction:column}
-}
-
-/* Architecture */
-.arch-row{
-  display:flex;flex-wrap:wrap;gap:16px;justify-content:center;
-}
-.arch-item{
-  padding:14px 24px;border:1.5px solid rgba(0,0,0,.15);border-radius:8px;
-  font-size:.88rem;text-align:center;background:rgba(255,255,255,.35);
-}
-.arch-item strong{display:block;font-size:.78rem;color:#666;font-weight:500;margin-top:4px}
-
-/* Safety */
-.safety-list{columns:2;column-gap:48px}
-.safety-list li{
-  font-size:.9rem;color:#444;margin-bottom:14px;
-  list-style:none;padding-left:16px;position:relative;
-}
-.safety-list li::before{content:'-';position:absolute;left:0;color:#1a1a1a}
-
-/* Metrics */
-.metrics-row{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:24px;text-align:center}
-.metric .val{font-size:2rem;font-weight:800;line-height:1}
-.metric .lbl{font-size:.85rem;color:#444;margin-top:6px}
-
-/* Comparison */
-.table-wrap{overflow-x:auto}
-table{width:100%;border-collapse:collapse;font-size:.85rem}
-th,td{padding:12px 16px;text-align:left;border-bottom:1px solid rgba(0,0,0,.08)}
-th{font-weight:700;font-size:.8rem;text-transform:uppercase;letter-spacing:.04em;color:#666}
-td:first-child{font-weight:600}
-
-/* Investors */
-.investor-grid{display:grid;grid-template-columns:1fr 1fr;gap:32px}
-.inv-card h3{font-size:1rem;font-weight:700;margin-bottom:6px}
-.inv-card p{font-size:.88rem;color:#444}
-
-/* Business model */
-.biz-row{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:20px;margin-top:40px}
-.biz-item{
-  padding:20px;border:1.5px solid rgba(0,0,0,.1);border-radius:8px;
-  background:rgba(255,255,255,.3);
-}
-.biz-item h4{font-size:.95rem;font-weight:700;margin-bottom:6px}
-.biz-item p{font-size:.85rem;color:#444}
-
-/* Roadmap */
-.roadmap{padding-left:24px;border-left:2px solid #1a1a1a}
-.phase{margin-bottom:40px;position:relative}
-.phase::before{
-  content:'';position:absolute;left:-29px;top:6px;
-  width:12px;height:12px;border-radius:50%;background:#1a1a1a;
-}
-.phase-label{font-size:.75rem;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:#666}
-.phase h3{font-size:1.05rem;font-weight:700;margin:2px 0 10px}
-.phase ul{list-style:none}
-.phase li{font-size:.88rem;color:#444;padding-left:14px;position:relative;margin-bottom:6px}
-.phase li::before{content:'-';position:absolute;left:0}
-
-/* CTA */
-.cta{text-align:center;padding:100px 0;border-top:1px solid rgba(0,0,0,.08)}
-.cta h2{font-size:clamp(1.8rem,4vw,2.6rem);font-weight:800;margin-bottom:16px}
-.cta p{font-size:.95rem;color:#444;margin-bottom:8px}
-.cta .hero-buttons{margin-top:28px}
-
-/* Footer */
-footer{
-  text-align:center;padding:32px 0;font-size:.82rem;color:#666;
-  border-top:1px solid rgba(0,0,0,.08);
-}
-footer a{color:#444;margin:0 12px}
-
-/* Responsive */
-@media(max-width:768px){
-  nav{padding:20px 24px}
-  .nav-links{gap:20px}
-  .features,.investor-grid{grid-template-columns:1fr}
-  .steps{grid-template-columns:1fr 1fr}
-  .safety-list{columns:1}
-  section{padding:72px 0}
-}
-@media(max-width:480px){
-  .steps{grid-template-columns:1fr}
-  .hero h1{font-size:2rem}
-}
-</style>
+<link rel="stylesheet" href="style.css">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 </head>
 <body>
@@ -234,7 +22,7 @@ footer a{color:#444;margin:0 12px}
 <section class="hero">
   <div class="container">
     <div class="hero-left">
-      <h1>One goal.<br>A self-assembling<br>AI team.</h1>
+      <h1>A self-assembling<br>AI team.</h1>
       <p>Describe a goal. Evolve spawns specialist agents, coordinates them, and delivers the result.</p>
     </div>
     <div class="hero-visual"></div>
@@ -248,7 +36,7 @@ footer a{color:#444;margin:0 12px}
 <section id="features">
   <div class="container">
     <div class="glass">
-    <h2 style="font-size:1.6rem;font-weight:800;margin-bottom:48px">Features</h2>
+    <h2 class="section-heading">Features</h2>
     <div class="features">
       <div class="feature">
         <h3>Self-Organizing</h3>
@@ -283,7 +71,7 @@ footer a{color:#444;margin:0 12px}
 <section id="how">
   <div class="container">
     <div class="glass">
-    <h2 style="font-size:1.6rem;font-weight:800;margin-bottom:48px">How It Works</h2>
+    <h2 class="section-heading">How It Works</h2>
     <div class="steps">
       <div>
         <div class="step-num">1</div>
@@ -314,7 +102,7 @@ footer a{color:#444;margin:0 12px}
 <section id="safety">
   <div class="container">
     <div class="glass">
-    <h2 style="font-size:1.6rem;font-weight:800;margin-bottom:48px">Safety and Control</h2>
+    <h2 class="section-heading">Safety and Control</h2>
     <ul class="safety-list">
       <li>Tool allowlists per agent blueprint. No privilege escalation.</li>
       <li>Session-wide USD budget cap. All agents halt when budget is exhausted.</li>
@@ -330,7 +118,7 @@ footer a{color:#444;margin:0 12px}
 <section id="demo">
   <div class="container">
     <div class="glass">
-    <h2 style="font-size:1.6rem;font-weight:800;margin-bottom:48px">Sample Output</h2>
+    <h2 class="section-heading">Sample Output</h2>
     <div class="terminal" style="max-width:680px">
       <div class="terminal-bar"><span></span><span></span><span></span></div>
       <div class="terminal-body" style="white-space:pre;overflow-x:auto"><span class="g">Evolve - Starting session</span>
@@ -357,7 +145,7 @@ footer a{color:#444;margin:0 12px}
 <section id="metrics">
   <div class="container">
     <div class="glass">
-    <h2 style="font-size:1.6rem;font-weight:800;margin-bottom:48px">By the Numbers</h2>
+    <h2 class="section-heading">By the Numbers</h2>
     <div class="metrics-row">
       <div class="metric"><div class="val">6-20</div><div class="lbl">Agents per session</div></div>
       <div class="metric"><div class="val">&lt;$0.10</div><div class="lbl">Cost per complex task</div></div>
@@ -372,7 +160,7 @@ footer a{color:#444;margin:0 12px}
 <section id="comparison">
   <div class="container">
     <div class="glass">
-    <h2 style="font-size:1.6rem;font-weight:800;margin-bottom:48px">Comparison</h2>
+    <h2 class="section-heading">Comparison</h2>
     <div class="table-wrap">
       <table>
         <thead>
@@ -396,8 +184,8 @@ footer a{color:#444;margin:0 12px}
 <section id="investors">
   <div class="container">
     <div class="glass">
-    <h2 style="font-size:1.6rem;font-weight:800;margin-bottom:12px">Why Evolve</h2>
-    <p style="color:#444;margin-bottom:48px">The agentic AI market is projected to reach $65B+ by 2030. Evolve agents self-organize based on the problem, not the pipeline.</p>
+    <h2 class="section-heading" style="margin-bottom:12px">Why Evolve</h2>
+    <p class="section-subtitle">The agentic AI market is projected to reach $65B+ by 2030. Evolve agents self-organize based on the problem, not the pipeline.</p>
     <div class="investor-grid">
       <div class="inv-card">
         <h3>Self-Organizing, Not Pre-Scripted</h3>
@@ -425,7 +213,7 @@ footer a{color:#444;margin:0 12px}
 <section id="roadmap">
   <div class="container">
     <div class="glass">
-    <h2 style="font-size:1.6rem;font-weight:800;margin-bottom:48px">Roadmap</h2>
+    <h2 class="section-heading">Roadmap</h2>
     <div class="roadmap">
       <div class="phase">
         <div class="phase-label">Phase 1</div>
@@ -471,11 +259,11 @@ footer a{color:#444;margin:0 12px}
 <!-- CTA -->
 <section class="cta">
   <div class="container">
-    <div class="glass" style="text-align:center">
+    <div class="glass cta-glass">
     <h2>Ready to let AI evolve?</h2>
     <p>Engineers: Clone the repo. Set your API key. Give it a goal.</p>
     <p>Investors: Let's talk about autonomous AI workforces.</p>
-    <div class="hero-buttons" style="display:flex;gap:12px;justify-content:center;margin-top:28px">
+    <div class="hero-buttons cta-buttons">
       <a href="#" class="btn btn-dark">Get Started</a>
       <a href="#" class="btn btn-outline">View on GitHub</a>
     </div>
@@ -497,7 +285,7 @@ footer a{color:#444;margin:0 12px}
   var ctx=c.getContext('2d');
   var mouse={x:null,y:null,radius:40};
   var particles=[];
-  var count=120;
+  var count=110;
   var linkDist=100;
 
   function resize(){
