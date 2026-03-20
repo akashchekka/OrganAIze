@@ -68,16 +68,21 @@ An agent shouldn't spawn because it *can*, but because it *must*. Three philosop
 The agent scores its own task on three axes before acting:
 
 ```python
+@dataclass
 class SpawnAssessment:
-    breadth: float    # How many distinct domains does this touch? (0-1)
-    depth: float      # How deep is the expertise needed? (0-1)
-    parallelism: float  # Can subtasks run independently? (0-1)
+    breadth: float = 0.0      # How many distinct domains does this touch? (0-1)
+    depth: float = 0.0        # How deep is the expertise needed? (0-1)
+    parallelism: float = 0.0  # Can subtasks run independently? (0-1)
+    reasoning: str = ""       # LLM's reasoning for the scores
 
     @property
     def should_spawn(self) -> bool:
-        # Spawn when breadth is high (multi-domain) AND parallelism allows it
-        # Don't spawn for deep-but-narrow tasks — just think harder
-        return (self.breadth > 0.6 and self.parallelism > 0.4) or self.breadth > 0.85
+        # Thresholds from config: SPAWN_BREADTH_THRESHOLD=0.6,
+        # SPAWN_PARALLELISM_THRESHOLD=0.4, SPAWN_AUTO_THRESHOLD=0.85
+        return (
+            (self.breadth > SPAWN_BREADTH_THRESHOLD and self.parallelism > SPAWN_PARALLELISM_THRESHOLD)
+            or self.breadth > SPAWN_AUTO_THRESHOLD
+        )
 ```
 
 The LLM performs this assessment via a structured output call:
@@ -113,25 +118,34 @@ if attempt.confidence < 0.4 or attempt.error:
 Before spawning, **always** check the Agent Registry:
 
 ```python
-def maybe_spawn(task_spec):
-    # 1. Check if a living agent can handle it
-    existing = registry.find_agent(
-        status="alive",
-        capabilities__overlap=task_spec.required_skills
-    )
-    if existing:
-        return assign_task(existing, task_spec)
+async def maybe_spawn(
+    self,
+    parent_blueprint: AgentBlueprint,
+    task_spec: dict,
+) -> AgentBlueprint | None:
+    """Try to reuse an existing agent, resurrect a hibernated one, or spawn new."""
+    required_skills = task_spec.get("expertise", [])
 
-    # 2. Check if a hibernated agent matches
-    hibernated = registry.find_agent(
+    # 1. Check for a living agent that already has the needed skills
+    existing = await self.registry.find_agent(
+        session_id=self.session_id,
+        status="alive",
+        capabilities=required_skills,
+    )
+    if existing and existing["_id"] != parent_blueprint.agent_id:
+        return None  # Caller should dispatch_task instead
+
+    # 2. Check for a hibernated agent
+    hibernated = await self.registry.find_agent(
+        session_id=self.session_id,
         status="hibernated",
-        capabilities__overlap=task_spec.required_skills
+        capabilities=required_skills,
     )
     if hibernated:
-        return resurrect_and_assign(hibernated, task_spec)
+        return None  # Caller handles lifecycle.resurrect()
 
-    # 3. Only then spawn new
-    return spawn_new_agent(task_spec)
+    # 3. Spawn new — with lock
+    return await self._create_agent(parent_blueprint, task_spec)
 ```
 
 ### Spawn Budget (Solves: Infinite Spawning)
@@ -139,15 +153,16 @@ def maybe_spawn(task_spec):
 Every agent is born with a **spawn budget** inherited from its parent:
 
 ```python
-MAX_GLOBAL_AGENTS = 20  # Hard ceiling
-MAX_DEPTH = 4           # No deeper than 4 levels
+MAX_GLOBAL_AGENTS = int(os.getenv("EVOLVE_MAX_AGENTS", "20"))   # Hard ceiling
+MAX_DEPTH = int(os.getenv("EVOLVE_MAX_DEPTH", "4"))             # No deeper than 4 levels
+GENESIS_SPAWN_BUDGET = int(os.getenv("EVOLVE_GENESIS_BUDGET", "8"))
 
-def calculate_child_budget(parent):
-    return SpawnBudget(
-        max_children=max(0, parent.budget.max_children // 2),  # Halves each level
-        max_depth=parent.budget.max_depth - 1,
-        remaining_global=global_agent_count.remaining()
-    )
+# Inside spawner._create_agent():
+child_budget = SpawnBudget(
+    max_children=max(0, parent.spawn_budget.max_children // 2),
+    max_depth_remaining=parent.spawn_budget.max_depth_remaining - 1,
+    remaining_global=MAX_GLOBAL_AGENTS - alive_count - 1,
+)
 ```
 
 Rules:
@@ -199,38 +214,40 @@ class AgentBlueprint:
 
 ### System Prompt Generation
 
-The parent agent doesn't write raw system prompts. It fills in the `AgentBlueprint`, and a **prompt compiler** turns it into a system prompt:
+The parent agent doesn't write raw system prompts. It fills in the `AgentBlueprint`, and a **prompt compiler** turns it into a system prompt using `AGENT_SYSTEM_PROMPT_TEMPLATE` from `prompts/agent.py`:
 
 ```python
 def compile_system_prompt(blueprint: AgentBlueprint) -> str:
-    return f"""You are {blueprint.name}, a {blueprint.role}.
-Personality: {blueprint.persona}
-Expertise: {', '.join(blueprint.expertise)}
-Verbosity: {blueprint.verbosity}
+    """Convert an AgentBlueprint into a system prompt string."""
+    if "spawn_agent" in blueprint.tools_allowed:
+        spawn_section = SPAWN_ALLOWED_SECTION.format(
+            max_children=blueprint.spawn_budget.max_children,
+            max_depth_remaining=blueprint.spawn_budget.max_depth_remaining,
+        )
+    else:
+        spawn_section = SPAWN_DENIED_SECTION
 
-YOUR TASK:
-{blueprint.task}
-
-SUCCESS CRITERIA:
-{blueprint.success_criteria}
-
-OUTPUT FORMAT:
-{blueprint.output_format}
-
-RULES:
-- You have {blueprint.max_steps} steps maximum.
-- Tools available: {blueprint.tools_allowed}
-- Tools denied: {blueprint.tools_denied}
-- Risk tolerance: {blueprint.risk_tolerance}
-- You {'CAN' if 'spawn_agent' in blueprint.tools_allowed else 'CANNOT'} spawn sub-agents.
-{'- Spawn budget: ' + str(blueprint.spawn_budget) if 'spawn_agent' in blueprint.tools_allowed else ''}
-
-COMMUNICATION:
-- Write findings to your blackboard namespace: {blueprint.memory_scope.write_ns}
-- You can read from: {blueprint.memory_scope.read_ns}
-- Mark keys as shared by prefixing with "shared:"
-"""
+    return AGENT_SYSTEM_PROMPT_TEMPLATE.format(
+        name=blueprint.name,
+        role=blueprint.role,
+        persona=blueprint.persona,
+        expertise=', '.join(blueprint.expertise) or 'general',
+        verbosity=blueprint.verbosity,
+        task=blueprint.task,
+        success_criteria=blueprint.success_criteria,
+        output_format=blueprint.output_format,
+        max_steps=blueprint.max_steps,
+        tools_allowed=', '.join(blueprint.tools_allowed) or 'none',
+        tools_denied=', '.join(blueprint.tools_denied) or 'none',
+        risk_tolerance=blueprint.risk_tolerance,
+        spawn_section=spawn_section,
+        write_ns=blueprint.memory_scope.write_ns,
+        read_ns=', '.join(blueprint.memory_scope.read_ns),
+        share_policy=blueprint.memory_scope.share_policy,
+    )
 ```
+
+The template and spawn sections are defined in `prompts/agent.py` as `AGENT_SYSTEM_PROMPT_TEMPLATE`, `SPAWN_ALLOWED_SECTION`, and `SPAWN_DENIED_SECTION`.
 
 ### Model Selection by Role (Solves: Cost Explosion)
 
@@ -238,12 +255,15 @@ Not every agent needs the most expensive model:
 
 | Role | Default Model | Rationale |
 |---|---|---|
-| Genesis / Orchestrator | gpt-4o / claude-opus | Needs best reasoning for decomposition |
-| Researcher | gpt-4o | Needs good synthesis of search results |
-| Engineer | claude-sonnet / gpt-4o | Good at code generation |
-| Critic / QA | gpt-4o-mini | Checking is cheaper than creating |
-| Summarizer | gpt-4o-mini | Compression task, lightweight |
-| PM / Tracker | gpt-4o-mini | Status tracking, minimal reasoning |
+| Genesis / Orchestrator | azure/gpt-4o | Needs best reasoning for decomposition |
+| Researcher | azure/gpt-4o | Needs good synthesis of search results |
+| Engineer | azure/gpt-4o | Good at code generation |
+| Critic / QA | azure/gpt-4o-mini | Checking is cheaper than creating |
+| Summarizer | azure/gpt-4o-mini | Compression task, lightweight |
+| PM / Tracker | azure/gpt-4o-mini | Status tracking, minimal reasoning |
+| Synthesizer | azure/gpt-4o | Needs strong reasoning for synthesis |
+
+Model routing is handled by **LiteLLM**, which auto-detects the provider from the model prefix (e.g., `azure/gpt-4o` → Azure OpenAI, `gpt-4o` → OpenAI, `claude-sonnet-4-20250514` → Anthropic). Defaults are configured in `config.py` via `ROLE_MODEL_DEFAULTS`.
 
 The parent agent can override this, but defaults keep costs bounded.
 
@@ -272,112 +292,141 @@ class MemoryScope:
 ```
 
 **Share policies:**
-- `manual` — Agent explicitly calls `publish_to_shared(key, value)` when it decides something is worth sharing.
-- `auto_conclusions` — Agent's final output is auto-copied to `shared:` namespace. Intermediate thoughts stay private.
-- `full_transparency` — Everything the agent writes is mirrored to `shared:`. Used for PM/tracker agents.
+- `manual` — Agent explicitly calls `share(key, value)` when it decides something is worth sharing.
+- `auto_conclusions` — Agent's final output is auto-copied to `shared:output:{agent_name}` namespace. Intermediate thoughts stay private.
+- `full_transparency` — Same as `auto_conclusions` — final output is auto-published. Used for PM/tracker agents.
 
 ### How Agents Communicate
 
 ```python
 class BlackboardClient:
-    def __init__(self, agent_id, session_id, memory_scope, redis):
+    """Per-agent client for Redis-backed shared memory, pub/sub, and streams."""
+
+    def __init__(
+        self,
+        agent_id: str,
+        session_id: str,
+        redis: aioredis.Redis | None = None,
+    ):
         self.agent_id = agent_id
         self.session_id = session_id
-        self.scope = memory_scope
-        self.redis = redis
-        self._stream_key = f"stream:{session_id}"  # Redis Stream for this session
+        self.redis = redis or aioredis.from_url(REDIS_URL, decode_responses=True)
+        self._stream_key = f"stream:{session_id}"
+        self._notify_channel = f"notify:{session_id}"
 
     # ── Key-Value (Blackboard) ──────────────────────────────────
 
-    def write(self, key: str, value: any):
+    async def write(self, key: str, value: Any) -> None:
         """Write to agent's private namespace."""
         full_key = f"blackboard:{self.session_id}:agent:{self.agent_id}:{key}"
-        self.redis.set(full_key, json.dumps(value))
-        self._log("write", key, value)
+        await self.redis.set(full_key, json.dumps(value))
 
-    def share(self, key: str, value: any):
+    async def share(self, key: str, value: Any) -> None:
         """Publish to shared namespace + notify listeners via pub/sub."""
         full_key = f"blackboard:{self.session_id}:shared:{key}"
-        self.redis.set(full_key, json.dumps(value))
-        # Push notification so waiting agents react immediately
-        self.redis.publish(
-            f"notify:{self.session_id}",
-            json.dumps({"agent": self.agent_id, "key": key, "event": "shared"})
+        await self.redis.set(full_key, json.dumps(value))
+        await self.redis.publish(
+            self._notify_channel,
+            json.dumps({"agent": self.agent_id, "key": key, "event": "shared"}),
         )
-        self._log("share", key, value)
 
-    def read_shared(self, pattern: str = "*") -> dict:
-        """Read all shared findings."""
-        keys = self.redis.keys(f"blackboard:{self.session_id}:shared:{pattern}")
-        return {k: json.loads(self.redis.get(k)) for k in keys}
+    async def read_shared(self, pattern: str = "*") -> dict[str, Any]:
+        """Read all shared findings matching a pattern."""
+        full_pattern = f"blackboard:{self.session_id}:shared:{pattern}"
+        keys = []
+        async for key in self.redis.scan_iter(match=full_pattern):
+            keys.append(key)
+        result = {}
+        for k in keys:
+            raw = await self.redis.get(k)
+            if raw:
+                result[k] = json.loads(raw)
+        return result
 
-    def read_mine(self, pattern: str = "*") -> dict:
+    async def read_mine(self, pattern: str = "*") -> dict[str, Any]:
         """Read own private memory."""
-        keys = self.redis.keys(f"blackboard:{self.session_id}:agent:{self.agent_id}:{pattern}")
-        return {k: json.loads(self.redis.get(k)) for k in keys}
+        full_pattern = f"blackboard:{self.session_id}:agent:{self.agent_id}:{pattern}"
+        keys = []
+        async for key in self.redis.scan_iter(match=full_pattern):
+            keys.append(key)
+        result = {}
+        for k in keys:
+            raw = await self.redis.get(k)
+            if raw:
+                result[k] = json.loads(raw)
+        return result
 
     # ── Pub/Sub (Push Notifications) ────────────────────────────
 
-    def wait_for_key(self, key: str, timeout: int = 60) -> any:
-        """Block until a specific shared key appears. No polling."""
-        # Check if already available
-        existing = self.redis.get(f"blackboard:{self.session_id}:shared:{key}")
+    async def wait_for_key(self, key: str, timeout: int = BLACKBOARD_READ_TIMEOUT) -> Any | None:
+        """Block until a specific shared key appears. Push-based, no polling."""
+        full_key = f"blackboard:{self.session_id}:shared:{key}"
+        existing = await self.redis.get(full_key)
         if existing:
             return json.loads(existing)
 
-        # Subscribe and wait for notification
         pubsub = self.redis.pubsub()
-        pubsub.subscribe(f"notify:{self.session_id}")
-        deadline = time.time() + timeout
-        for message in pubsub.listen():
-            if time.time() > deadline:
-                return None  # Timed out — agent reports partial results to parent
-            if message["type"] == "message":
-                data = json.loads(message["data"])
-                if data["key"] == key:
-                    pubsub.unsubscribe()
-                    return json.loads(
-                        self.redis.get(f"blackboard:{self.session_id}:shared:{key}")
-                    )
+        await pubsub.subscribe(self._notify_channel)
+        deadline = time.monotonic() + timeout
+        try:
+            async for message in pubsub.listen():
+                if time.monotonic() > deadline:
+                    return None
+                if message["type"] == "message":
+                    data = json.loads(message["data"])
+                    if data.get("key") == key:
+                        raw = await self.redis.get(full_key)
+                        return json.loads(raw) if raw else None
+        finally:
+            await pubsub.unsubscribe(self._notify_channel)
+            await pubsub.aclose()
 
     # ── Streams (Task Dispatch) ─────────────────────────────────
 
-    def dispatch_task(self, target_agent_id: str, task: dict):
+    async def dispatch_task(self, target_agent_id: str, task: dict) -> None:
         """Send a task to a specific agent via Redis Stream."""
-        self.redis.xadd(self._stream_key, {
-            "from": self.agent_id,
-            "to": target_agent_id,
-            "type": "task",
-            "payload": json.dumps(task)
-        })
+        await self.redis.xadd(
+            self._stream_key,
+            {
+                "from": self.agent_id,
+                "to": target_agent_id,
+                "type": "task",
+                "payload": json.dumps(task),
+            },
+        )
 
-    def consume_tasks(self, consumer_group: str = None) -> list[dict]:
+    async def consume_tasks(self) -> list[dict]:
         """Read tasks dispatched to this agent from the stream."""
-        group = consumer_group or f"group:{self.agent_id}"
-        # Create consumer group if not exists
+        group = f"group:{self.agent_id}"
         try:
-            self.redis.xgroup_create(self._stream_key, group, id="0", mkstream=True)
+            await self.redis.xgroup_create(self._stream_key, group, id="0", mkstream=True)
         except Exception:
             pass  # Group already exists
-        messages = self.redis.xreadgroup(group, self.agent_id, {self._stream_key: ">"}, count=10)
-        return [
-            json.loads(msg["payload"])
-            for stream_msgs in messages
-            for _, msg in stream_msgs[1]
-            if msg.get("to") == self.agent_id
-        ]
 
-    # ── Artifact Storage ────────────────────────────────────────
+        messages = await self.redis.xreadgroup(
+            group, self.agent_id, {self._stream_key: ">"}, count=10
+        )
+        results = []
+        if messages:
+            for _stream, entries in messages:
+                for _msg_id, fields in entries:
+                    if fields.get("to") == self.agent_id:
+                        results.append(json.loads(fields["payload"]))
+        return results
 
-    def store_artifact(self, filename: str, data: bytes, object_store) -> str:
-        """Store large output (images, code, datasets) in object storage.
-        Returns a reference URL stored in the blackboard."""
-        artifact_path = f"{self.session_id}/{self.agent_id}/{filename}"
-        url = object_store.put(artifact_path, data)
-        # Store reference in private namespace
-        self.write(f"artifact:{filename}", {"url": url, "size": len(data)})
-        return url
+    # ── Cleanup ─────────────────────────────────────────────────
+
+    async def cleanup_session(self, session_id: str) -> None:
+        """Remove all blackboard keys for a completed session."""
+        pattern = f"blackboard:{session_id}:*"
+        keys = []
+        async for key in self.redis.scan_iter(match=pattern):
+            keys.append(key)
+        if keys:
+            await self.redis.delete(*keys)
 ```
+
+Artifact storage is handled separately by `memory/artifacts.py`, which provides `LocalObjectStore` (dev) and `S3ObjectStore` (production) backends via an `ObjectStore` protocol.
 
 ### Agent Registry in MongoDB
 
@@ -398,12 +447,14 @@ class BlackboardClient:
     "expertise": ["computer_vision", "generative_models"],
     "tools_allowed": ["web_search", "read_paper"],
     "tools_denied": ["spawn_agent"],
-    "model": "gpt-4o",
-    "system_prompt_compiled": "...",  // Cached compiled prompt
+    "model": "azure/gpt-4o",
     "task": "Find best models for floor-plan-to-image generation",
     "success_criteria": "Ranked list of 3+ models with pros/cons",
     "output_format": "structured_report"
   },
+
+  // Compiled prompt stored separately from blueprint
+  "system_prompt_compiled": "...",
 
   // Lifecycle
   "status": "alive",          // alive | completed | hibernated | dead
@@ -422,8 +473,7 @@ class BlackboardClient:
     "input_tokens": 4200,
     "output_tokens": 1800,
     "total_tokens": 6000,
-    "llm_calls": 3,
-    "cost_usd": 0.018
+    "llm_calls": 3
   },
 
   // Token Usage (subtree) — this agent + ALL descendants, rolled up
@@ -432,34 +482,39 @@ class BlackboardClient:
     "output_tokens": 9200,
     "total_tokens": 27600,
     "llm_calls": 14,
-    "cost_usd": 0.073,
     "agent_count": 3          // self + 2 children
   },
 
   // Results
   "final_output": null,       // Populated on completion
-  "exit_reason": null         // "completed" | "ttl_expired" | "budget_exhausted" | "killed_by_parent"
+  "exit_reason": null,        // "completed" | "ttl_expired" | "budget_exhausted" | "killed_by_parent"
+  "saved_state": null         // Populated on hibernation for resume
 }
 ```
 
 ### Context Aggregation (Solves: Context Window Blow-up)
 
-When the Genesis agent collects results from sub-agents, it doesn't dump raw outputs into its context. Instead:
+When child agents complete, their output is returned to the parent via `_handle_spawn()` in the tool node. Outputs are truncated inline — no separate aggregator class:
 
 ```python
-class ResultAggregator:
-    def aggregate(self, child_results: list[AgentResult]) -> str:
-        summaries = []
-        for result in child_results:
-            # Each agent's output was already in output_format
-            # Compress further if needed
-            if len(result.output) > 2000:
-                summary = llm_mini.summarize(result.output, max_tokens=500)
-            else:
-                summary = result.output
-            summaries.append(f"[{result.agent_name}]: {summary}")
+async def _handle_spawn(args, parent_bp, spawner, deps) -> dict:
+    child_bp = await spawner.maybe_spawn(parent_bp, args)
+    if not child_bp:
+        return {"tool": "spawn_agent", "status": "denied", "reason": "Reuse existing or budget exhausted."}
 
-        return "\n---\n".join(summaries)
+    child_output = await run_agent_graph(
+        blueprint=child_bp,
+        session_id=deps["session_id"],
+        cost_tracker=deps["cost_tracker"],
+        event_logger=deps["event_logger"],
+        blackboard_redis=deps["blackboard"].redis,
+        spawner=deps["spawner"],
+        checkpointer=deps.get("checkpointer"),
+    )
+
+    # Truncate to 3000 chars so parent's context doesn't blow up
+    summary = child_output[:3000] if len(child_output) <= 3000 else child_output[:3000] + "\n...[truncated]"
+    return {"tool": "spawn_agent", "status": "completed", "agent_name": child_bp.name, "output": summary}
 ```
 
 Rules:
@@ -510,51 +565,144 @@ Rules:
 
 ```python
 class AgentLifecycle:
-    def __init__(self, agent_id, ttl_seconds, registry, redis):
+    """Manages TTL heartbeats, hibernation, and resurrection for a single agent."""
+
+    def __init__(
+        self,
+        agent_id: str,
+        agent_name: str,
+        depth: int,
+        ttl_seconds: int,
+        max_steps: int,
+        session_id: str,
+        registry: AgentRegistry,
+        event_logger: EventLogger,
+        redis: aioredis.Redis,
+    ):
         self.agent_id = agent_id
-        self.ttl = ttl_seconds
-        # Set a Redis key with TTL for automatic expiration detection
-        redis.setex(f"heartbeat:{agent_id}", ttl_seconds, "alive")
+        self.agent_name = agent_name
+        self.depth = depth
+        self.ttl_seconds = ttl_seconds
+        self.max_steps = max_steps
+        self.session_id = session_id
+        self.registry = registry
+        self.event_logger = event_logger
+        self.redis = redis
 
-    def step(self):
-        """Called after each agent action. Checks if still alive."""
-        if not self.redis.exists(f"heartbeat:{self.agent_id}"):
-            self.hibernate()  # TTL expired between steps
-            raise AgentExpired()
+    async def start(self) -> None:
+        """Initialize the heartbeat key in Redis."""
+        await self.redis.setex(f"heartbeat:{self.agent_id}", self.ttl_seconds, "alive")
 
-    def extend_ttl(self, extra_seconds):
-        """Agent can request more time if making progress."""
-        remaining = self.redis.ttl(f"heartbeat:{self.agent_id}")
-        self.redis.expire(f"heartbeat:{self.agent_id}", remaining + extra_seconds)
-        self._log("ttl_extended", extra_seconds)
+    async def check_alive(self) -> bool:
+        """Check if the agent's heartbeat is still valid."""
+        return bool(await self.redis.exists(f"heartbeat:{self.agent_id}"))
 
-    def hibernate(self):
-        """Save state and go to sleep."""
-        state = self.capture_state()
-        self.registry.update(self.agent_id, status="hibernated", saved_state=state)
+    async def step(self) -> int:
+        """Called after each agent action. Checks TTL and step limit.
+        Returns updated steps_taken."""
+        if not await self.check_alive():
+            await self.hibernate(reason="ttl_expired")
+            raise AgentExpired(f"Agent {self.agent_id} TTL expired")
+
+        steps = await self.registry.increment_steps(self.agent_id)
+        if steps >= self.max_steps:
+            await self.die(reason="max_steps_exceeded")
+            raise AgentExpired(f"Agent {self.agent_id} exceeded max steps ({self.max_steps})")
+        return steps
+
+    async def extend_ttl(self, extra_seconds: int) -> None:
+        """Extend the agent's TTL if it's making progress."""
+        remaining = await self.redis.ttl(f"heartbeat:{self.agent_id}")
+        if remaining > 0:
+            await self.redis.expire(f"heartbeat:{self.agent_id}", remaining + extra_seconds)
+            await self.event_logger.log_event(
+                session_id=self.session_id, agent_id=self.agent_id,
+                agent_name=self.agent_name, depth=self.depth,
+                event_type=AGENT_TTL_EXTENDED,
+                payload={"extra_seconds": extra_seconds, "new_remaining": remaining + extra_seconds},
+            )
+
+    async def hibernate(self, reason: str = "ttl_expired", saved_state: dict | None = None) -> None:
+        """Put the agent to sleep — preserves state for resurrection."""
+        await self.redis.delete(f"heartbeat:{self.agent_id}")
+        await self.registry.update(self.agent_id, status="hibernated", exit_reason=reason,
+                                   saved_state=saved_state or {})
+        await self.event_logger.log_event(
+            session_id=self.session_id, agent_id=self.agent_id,
+            agent_name=self.agent_name, depth=self.depth,
+            event_type=AGENT_HIBERNATED, payload={"reason": reason},
+        )
+
+    async def complete(self, final_output: str) -> None:
+        """Mark the agent as successfully completed."""
+        await self.redis.delete(f"heartbeat:{self.agent_id}")
+        await self.registry.update(self.agent_id, status="completed",
+                                   exit_reason="completed", final_output=final_output)
+
+    async def die(self, reason: str = "killed") -> None:
+        """Terminate the agent."""
+        await self.redis.delete(f"heartbeat:{self.agent_id}")
+        await self.registry.update(self.agent_id, status="dead", exit_reason=reason)
+        await self.event_logger.log_event(
+            session_id=self.session_id, agent_id=self.agent_id,
+            agent_name=self.agent_name, depth=self.depth,
+            event_type=AGENT_DIED, payload={"reason": reason},
+        )
 ```
 
 ### Resurrection Protocol
 
 ```python
-def resurrect(agent_id, new_task=None):
-    record = registry.find_by_id(agent_id)
-    assert record["status"] == "hibernated"
+async def resurrect(
+    agent_id: str,
+    registry: AgentRegistry,
+    event_logger: EventLogger,
+    redis: aioredis.Redis,
+    session_id: str,
+    new_task: str | None = None,
+    new_ttl: int | None = None,
+) -> tuple[AgentBlueprint, str, dict]:
+    """Resurrect a hibernated agent. Returns (blueprint, system_prompt, saved_state)."""
+    record = await registry.find_by_id(agent_id)
+    if not record or record["status"] != "hibernated":
+        raise ValueError(f"Agent {agent_id} is not hibernated")
 
-    blueprint = record["blueprint"]
+    bp_data = record["blueprint"]
     saved_state = record.get("saved_state", {})
 
-    # Rehydrate the agent with its original DNA + saved progress
-    agent = Agent(
-        blueprint=blueprint,
-        initial_context=f"""You were previously working on this task and were paused.
-Your progress so far: {saved_state.get('partial_results', 'None')}
-Last step completed: {saved_state.get('last_step', 'None')}
-{'New additional task: ' + new_task if new_task else 'Resume where you left off.'}"""
+    blueprint = AgentBlueprint(**{
+        k: v for k, v in bp_data.items()
+        if k in AgentBlueprint.__dataclass_fields__
+    })
+
+    if new_task:
+        blueprint.task = new_task
+
+    ttl = new_ttl or blueprint.ttl_seconds
+    system_prompt = compile_system_prompt(blueprint)
+
+    # Add resurrection context from RESURRECTION_CONTEXT_TEMPLATE
+    resume_instruction = f"New additional task: {new_task}" if new_task else "Resume where you left off."
+    resurrection_context = RESURRECTION_CONTEXT_TEMPLATE.format(
+        partial_results=saved_state.get('partial_results', 'None'),
+        last_step=saved_state.get('last_step', 'None'),
+        resume_instruction=resume_instruction,
     )
 
-    registry.update(agent_id, status="alive", ttl_seconds=blueprint.ttl_seconds)
-    return agent
+    # Update registry and set heartbeat
+    await registry.update(agent_id, status="alive", ttl_seconds=ttl,
+                          expires_at=..., exit_reason=None)
+    await redis.setex(f"heartbeat:{agent_id}", ttl, "alive")
+
+    # Log resurrection event
+    await event_logger.log_event(
+        session_id=session_id, agent_id=agent_id,
+        agent_name=blueprint.name, depth=blueprint.depth,
+        event_type=AGENT_RESURRECTED,
+        payload={"new_task": new_task, "previous_state_keys": list(saved_state.keys())},
+    )
+
+    return blueprint, system_prompt + resurrection_context, saved_state
 ```
 
 ---
@@ -566,16 +714,17 @@ Every agent action produces an **event** appended to an immutable log. Nothing i
 ### Event Schema
 
 ```python
+@dataclass
 class AgentEvent:
-    event_id: str           # UUID
-    timestamp: datetime     # ISO 8601
-    session_id: str
-    agent_id: str
-    agent_name: str
-    depth: int
-    event_type: str         # See event types below
-    payload: dict           # Event-specific data
-    parent_event_id: str    # For causal chain tracing (optional)
+    event_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    timestamp: str = field(default_factory=lambda: dt.datetime.now(dt.timezone.utc).isoformat())  # ISO 8601 string
+    session_id: str = ""
+    agent_id: str = ""
+    agent_name: str = ""
+    depth: int = 0
+    event_type: str = ""        # See event types below
+    payload: dict = field(default_factory=dict)
+    parent_event_id: str | None = None  # For causal chain tracing
 ```
 
 ### Event Types
@@ -584,50 +733,76 @@ class AgentEvent:
 |---|---|---|
 | `agent.spawned` | Agent created | `{blueprint, parent_id, spawn_reason}` |
 | `agent.thought` | LLM internal reasoning | `{thought_text, step_number}` |
-| `agent.tool_call` | Tool invoked | `{tool_name, args, result, latency_ms}` |
-| `agent.tool_error` | Tool failed | `{tool_name, args, error}` |
+| `agent.tool_call` | Tool invoked | `{tool_name, args, result_preview}` |
+| `agent.tool_error` | Tool failed | `{tool_name, error}` |
 | `agent.spawn_decision` | Decided to spawn (or not) | `{assessment: SpawnAssessment, decision, reason}` |
 | `agent.blackboard_write` | Wrote to blackboard | `{namespace, key, value_preview}` |
 | `agent.blackboard_read` | Read from blackboard | `{namespace, pattern, keys_returned}` |
-| `agent.output` | Produced final output | `{output, meets_success_criteria}` |
-| `agent.hibernated` | TTL expired, going to sleep | `{saved_state_summary}` |
-| `agent.resurrected` | Woken from hibernation | `{new_task, previous_state}` |
-| `agent.died` | Terminated | `{exit_reason, steps_taken}` |
-| `agent.cost` | LLM call made | `{model, input_tokens, output_tokens, cost_usd}` |
+| `agent.output` | Produced final output | `{output, status}` |
+| `agent.hibernated` | TTL expired, going to sleep | `{reason}` |
+| `agent.resurrected` | Woken from hibernation | `{new_task, previous_state_keys}` |
+| `agent.died` | Terminated | `{reason}` |
+| `agent.cost` | LLM call made | `{model, input_tokens, output_tokens, session_total_tokens}` |
+| `agent.ttl_extended` | TTL extended | `{extra_seconds, new_remaining}` |
 
 ### Storage & Querying
 
 ```python
-# MongoDB collection: events (capped or TTL-indexed for cleanup)
-# Index on: session_id, agent_id, event_type, timestamp
-
 class EventLogger:
-    def __init__(self, db):
+    """Async MongoDB-backed immutable event journal."""
+
+    def __init__(self, db: AsyncIOMotorDatabase):
         self.collection = db["events"]
 
-    def log(self, event: AgentEvent):
-        self.collection.insert_one(asdict(event))
+    async def ensure_indexes(self):
+        await self.collection.create_index("session_id")
+        await self.collection.create_index("agent_id")
+        await self.collection.create_index("event_type")
+        await self.collection.create_index("timestamp")
+        await self.collection.create_index(
+            [("session_id", 1), ("agent_id", 1), ("timestamp", 1)]
+        )
 
-    def get_agent_trace(self, agent_id) -> list[AgentEvent]:
+    async def log(self, event: AgentEvent) -> None:
+        """Append an event to the journal. Never update or delete."""
+        await self.collection.insert_one(asdict(event))
+
+    async def log_event(
+        self, session_id, agent_id, agent_name, depth, event_type, payload,
+        parent_event_id=None,
+    ) -> AgentEvent:
+        """Convenience: build and log an event in one call."""
+        event = AgentEvent(
+            session_id=session_id, agent_id=agent_id, agent_name=agent_name,
+            depth=depth, event_type=event_type, payload=payload,
+            parent_event_id=parent_event_id,
+        )
+        await self.log(event)
+        return event
+
+    async def get_agent_trace(self, agent_id: str) -> list[dict]:
         """Full chronological trace of one agent's life."""
-        return list(self.collection.find(
-            {"agent_id": agent_id}
-        ).sort("timestamp", 1))
+        cursor = self.collection.find({"agent_id": agent_id}).sort("timestamp", 1)
+        return await cursor.to_list(length=None)
 
-    def get_session_tree(self, session_id) -> list[AgentEvent]:
+    async def get_session_events(self, session_id: str) -> list[dict]:
         """Everything that happened in a session — for post-mortem."""
-        return list(self.collection.find(
-            {"session_id": session_id}
-        ).sort("timestamp", 1))
+        cursor = self.collection.find({"session_id": session_id}).sort("timestamp", 1)
+        return await cursor.to_list(length=None)
 
-    def get_spawn_tree(self, session_id) -> dict:
-        """Reconstruct the agent hierarchy for visualization."""
-        spawns = self.collection.find({
-            "session_id": session_id,
-            "event_type": "agent.spawned"
-        })
-        # Build tree from lineage data
-        ...
+    async def get_spawn_tree(self, session_id: str) -> list[dict]:
+        """Get all spawn events for hierarchy reconstruction."""
+        cursor = self.collection.find(
+            {"session_id": session_id, "event_type": "agent.spawned"}
+        ).sort("timestamp", 1)
+        return await cursor.to_list(length=None)
+
+    async def get_cost_events(self, session_id: str) -> list[dict]:
+        """Get all cost events for budget analysis."""
+        cursor = self.collection.find(
+            {"session_id": session_id, "event_type": "agent.cost"}
+        ).sort("timestamp", 1)
+        return await cursor.to_list(length=None)
 ```
 
 ### Post-Evaluation Dashboard (What You Can Answer)
@@ -635,7 +810,7 @@ class EventLogger:
 From this log, you can answer:
 - **How many agents were spawned?** Count `agent.spawned` events.
 - **Was spawning efficient?** Compare agents that produced useful output vs. those that died without output.
-- **What was the total cost?** Sum all `agent.cost` events.
+- **What was the total token usage?** Sum all `agent.cost` events.
 - **Where did time go?** Timeline visualization from timestamps.
 - **Did any agent loop?** Detect repeated `agent.thought` patterns.
 - **What was the critical path?** Trace from final output back through `parent_event_id` chains.
@@ -713,13 +888,14 @@ if alive_count >= MAX_GLOBAL_AGENTS:
 
 **All three are enforced under a Redis distributed lock** (`Redlock`) to prevent race conditions where two agents try to spend the last budget slot simultaneously.
 
-### Context Window Blow-up → Hierarchical Summarization
+### Context Window Blow-up → Inline Output Truncation
 
 ```
-Agent outputs are not dumped raw into parent context.
-Each child output → summarized if > 2000 chars.
-Full data stays on blackboard for drill-down.
-Parent can ask: "Agent X, expand on point 3" via targeted read.
+Child agent outputs are returned to the parent as tool results.
+Each child output → truncated to 3000 chars in _handle_spawn().
+Full data stays on blackboard — parent can drill down via read_shared.
+Additionally, agents with "auto_conclusions" or "full_transparency" share
+  policy auto-publish their final output to the shared namespace.
 ```
 
 ### Tool Safety → Allowlist per Agent
@@ -729,137 +905,47 @@ Parent can ask: "Agent X, expand on point 3" via targeted read.
 # Each agent only gets the tools its blueprint specifies.
 # Dangerous tools (file_delete, shell_exec) require:
 #   1. Blueprint explicitly lists them
-#   2. Agent depth <= 1 (only direct children of genesis)
-#   3. Confirmation event logged before execution
+#   2. Agent depth <= RESTRICTED_TOOLS_MAX_DEPTH (default: 1)
+#   3. Access validated before every tool call
 
 RESTRICTED_TOOLS = {"shell_exec", "file_delete", "network_request_external"}
+RESTRICTED_TOOLS_MAX_DEPTH = 1
 
-def validate_tool_access(agent, tool_name):
-    if tool_name in RESTRICTED_TOOLS:
-        if agent.depth > 1:
-            raise ToolDenied(f"{tool_name} restricted to depth <= 1")
-        log_event("agent.restricted_tool_use", {
-            "tool": tool_name, "agent": agent.id, "approved": True
-        })
-```
+def validate_tool_access(
+    tool_name: str,
+    agent_tools_allowed: list[str],
+    agent_tools_denied: list[str],
+    agent_depth: int,
+) -> None:
+    """Check whether an agent is allowed to use a specific tool."""
+    if tool_name in agent_tools_denied:
+        raise ToolDenied(f"Tool '{tool_name}' is explicitly denied for this agent.")
 
-### Cost Explosion → Budget Tracking + Model Tiering + Per-Agent Token Accounting
+    if tool_name not in agent_tools_allowed:
+        raise ToolDenied(f"Tool '{tool_name}' is not in this agent's allowed tools.")
 
-```python
-class TokenUsage:
-    """Tracks token consumption for a single agent."""
-    input_tokens: int = 0
-    output_tokens: int = 0
-    total_tokens: int = 0
-    llm_calls: int = 0
-    cost_usd: float = 0.0
-
-    def record(self, model: str, inp: int, out: int):
-        self.input_tokens += inp
-        self.output_tokens += out
-        self.total_tokens += (inp + out)
-        self.llm_calls += 1
-        self.cost_usd += calculate_cost(model, inp, out)
-
-
-class CostTracker:
-    """
-    Session-wide cost tracker. Also maintains per-agent token ledgers
-    and rolls up subtree totals to parent agents in the registry.
-    """
-    def __init__(self, session_budget_usd: float = 1.00, registry=None):
-        self.budget = session_budget_usd
-        self.spent = 0.0
-        self.registry = registry
-        self.agent_usage: dict[str, TokenUsage] = {}  # agent_id → TokenUsage
-
-    def charge(self, agent_id: str, model: str, input_tokens: int, output_tokens: int):
-        cost = calculate_cost(model, input_tokens, output_tokens)
-        self.spent += cost
-
-        # Track per-agent tokens
-        if agent_id not in self.agent_usage:
-            self.agent_usage[agent_id] = TokenUsage()
-        self.agent_usage[agent_id].record(model, input_tokens, output_tokens)
-
-        # Persist to agent registry (MongoDB) after every call
-        self.registry.update(agent_id, token_usage=asdict(self.agent_usage[agent_id]))
-
-        # Session-level budget alerts
-        if self.spent > self.budget * 0.8:
-            notify_genesis("80% budget consumed")
-        if self.spent >= self.budget:
-            raise BudgetExhausted()
-        return cost
-
-    def rollup_subtree(self, agent_id: str):
-        """
-        Called when an agent completes. Walks up the lineage to update
-        every ancestor's subtree_token_usage with this agent's own tokens.
-        """
-        agent = self.registry.find_by_id(agent_id)
-        own = self.agent_usage.get(agent_id, TokenUsage())
-
-        # Update own subtree (self + children already rolled up)
-        children_subtrees = [
-            self.registry.find_by_id(cid).get("subtree_token_usage", {})
-            for cid in agent.get("children", [])
-        ]
-        subtree = TokenUsage(
-            input_tokens=own.input_tokens + sum(c.get("input_tokens", 0) for c in children_subtrees),
-            output_tokens=own.output_tokens + sum(c.get("output_tokens", 0) for c in children_subtrees),
-            total_tokens=own.total_tokens + sum(c.get("total_tokens", 0) for c in children_subtrees),
-            llm_calls=own.llm_calls + sum(c.get("llm_calls", 0) for c in children_subtrees),
-            cost_usd=own.cost_usd + sum(c.get("cost_usd", 0) for c in children_subtrees),
+    if tool_name in RESTRICTED_TOOLS and agent_depth > RESTRICTED_TOOLS_MAX_DEPTH:
+        raise ToolDenied(
+            f"Tool '{tool_name}' is restricted to agents at depth <= {RESTRICTED_TOOLS_MAX_DEPTH} "
+            f"(agent is at depth {agent_depth})."
         )
-        agent_count = 1 + sum(c.get("agent_count", 1) for c in children_subtrees)
-
-        self.registry.update(agent_id, subtree_token_usage={
-            **asdict(subtree), "agent_count": agent_count
-        })
-
-    def get_session_summary(self) -> dict:
-        """Total token usage across all agents in the session."""
-        return {
-            "total_input_tokens": sum(u.input_tokens for u in self.agent_usage.values()),
-            "total_output_tokens": sum(u.output_tokens for u in self.agent_usage.values()),
-            "total_tokens": sum(u.total_tokens for u in self.agent_usage.values()),
-            "total_llm_calls": sum(u.llm_calls for u in self.agent_usage.values()),
-            "total_cost_usd": self.spent,
-            "per_agent": {
-                aid: asdict(usage) for aid, usage in self.agent_usage.items()
-            }
-        }
-
-# Model tiering: cheap models for cheap tasks (see section 2)
-# Parallel execution capped: max 3 concurrent LLM calls
 ```
 
-**How token data flows:**
+### Cost Explosion → Token Budget + Model Tiering + Per-Agent Token Accounting
 
-```
-Agent makes LLM call
-    │
-    ▼
-CostTracker.charge(agent_id, model, in, out)
-    ├── Updates in-memory TokenUsage for this agent
-    ├── Persists token_usage to MongoDB (agent's own row)
-    └── Checks session budget
-    │
-Agent completes
-    │
-    ▼
-CostTracker.rollup_subtree(agent_id)
-    ├── Sums own tokens + all children's subtree_token_usage
-    ├── Writes subtree_token_usage to MongoDB
-    └── Parent can now see: "my subtree used X tokens total"
-    │
-Genesis completes
-    │
-    ▼
-CostTracker.get_session_summary()
-    └── Returns full breakdown: per-agent + session totals
-```
+Two classes in `core/cost_tracker.py` handle all token accounting:
+
+**`TokenUsage`** — A simple dataclass ledger that tracks `input_tokens`, `output_tokens`, `total_tokens`, and `llm_calls` for a single agent. Updated via `record(inp, out)` after each LLM call.
+
+**`CostTracker`** — Session-wide singleton shared by all agents in a run. Three key methods:
+
+| Method | When Called | What It Does |
+|---|---|---|
+| `charge()` | After every LLM call | 1. Adds tokens to in-memory `TokenUsage` for that agent. 2. Persists `token_usage` to MongoDB. 3. Logs an `agent.cost` event. 4. Raises `TokenCapExceeded` if session total hits `MAX_SESSION_TOKENS` (default: 500k). |
+| `rollup_subtree()` | When an agent completes | Sums the agent's own tokens + all children's `subtree_token_usage` from MongoDB, writes the rolled-up total back. Parents can see "my entire subtree used X tokens." |
+| `get_session_summary()` | At session end | Returns full breakdown: per-agent totals, session totals, `tokens_remaining`. |
+
+Model tiering (cheap models for cheap tasks) keeps costs bounded — see Section 2. LLM concurrency is capped at `MAX_CONCURRENT_LLM_CALLS` (default: 3) via an asyncio semaphore in `core/agent.py`.
 
 ### Deadlocks → No Circular Dependencies by Design
 
@@ -872,27 +958,44 @@ If Agent A needs Agent B's output:
   → Redis pub/sub pushes notification the instant B shares the key
   → No CPU-wasting polls
 
-wait_timeout = 60 seconds
+wait_timeout = BLACKBOARD_READ_TIMEOUT (default: 60 seconds)
 on_timeout → report partial results to parent, let parent decide
 ```
 
 ### Spawn Race Conditions → Redis Distributed Locks
 
 ```python
-def safe_spawn(parent, task_spec):
-    """Acquire a Redlock before spending spawn budget.
-    Prevents two concurrent agents from using the last slot."""
-    lock = redis.lock(f"spawn_lock:{parent.session_id}", timeout=5)
-    if lock.acquire(blocking_timeout=3):
+class SpawnLock:
+    """Async Redis-based distributed lock for safe spawn budget enforcement."""
+
+    def __init__(self, redis: aioredis.Redis | None = None):
+        self.redis = redis or aioredis.from_url(REDIS_URL, decode_responses=True)
+
+    @asynccontextmanager
+    async def acquire(self, session_id: str, timeout: float = 5.0) -> AsyncGenerator[bool, None]:
+        """Context manager that acquires a distributed lock for spawning."""
+        lock = self.redis.lock(
+            f"spawn_lock:{session_id}",
+            timeout=timeout,
+            blocking_timeout=3.0,
+        )
+        acquired = await lock.acquire()
         try:
-            remaining = global_agent_count.remaining()
-            if remaining <= 0:
-                raise SpawnDenied("Global agent cap reached")
-            return spawn_new_agent(task_spec)
+            yield acquired
         finally:
-            lock.release()
-    else:
-        raise SpawnDenied("Could not acquire spawn lock")
+            if acquired:
+                await lock.release()
+```
+
+Used inside `Spawner._create_agent()`:
+
+```python
+async def _create_agent(self, parent, spec) -> AgentBlueprint | None:
+    async with self.spawn_lock.acquire(self.session_id) as acquired:
+        if not acquired:
+            return None
+        # Check global cap, parent budget, create child — all under lock
+        ...
 ```
 
 ---
@@ -907,9 +1010,9 @@ def safe_spawn(parent, task_spec):
    ├── should_continue → tools (spawn_agent tool calls)
    ├── tool_node: Checks registry → no existing agents → spawn fresh
    └── Spawns child StateGraphs via run_agent_graph():
-       ├── ResearchAgent graph (model=gpt-4o, tools=[web_search], ttl=300s)
-       ├── ArchitectAgent graph (model=claude-sonnet, tools=[code_exec], ttl=300s)
-       └── PMAgent graph (model=gpt-4o-mini, tools=[], share_policy=full_transparency)
+       ├── ResearchAgent graph (model=azure/gpt-4o, tools=[web_search], ttl=300s)
+       ├── ArchitectAgent graph (model=azure/gpt-4o, tools=[code_execute], ttl=300s)
+       └── PMAgent graph (model=azure/gpt-4o-mini, tools=[], share_policy=full_transparency)
 
 3. Child agent graphs run (each with own checkpointed StateGraph)
    ├── ResearchAgent:
@@ -943,7 +1046,7 @@ def safe_spawn(parent, task_spec):
 
 5. Post-evaluation:
    ├── 6 agents spawned, 6 produced useful output → 100% efficiency
-   ├── Total cost: $0.23
+   ├── Total tokens: ~27,000 (within 500k session cap)
    ├── Total time: 45 seconds (parallel execution)
    └── Spawn tree visualization generated from event log
 ```
@@ -961,7 +1064,6 @@ def safe_spawn(parent, task_spec):
 | **Redis** | Blackboard (KV) + Streams (bus) + Pub/Sub (notifications) + Redlock (concurrency) + Heartbeats (TTL) | Sub-ms reads, push-based coordination, precise TTL, distributed locking |
 | **Object Storage** | S3 / Azure Blob / MinIO | Large artifacts (images, code, datasets). MongoDB stores only reference URLs. |
 | **Orchestration** | asyncio + semaphore | Parallel agent execution with concurrency cap |
-| **Dashboard** | Streamlit or Grafana | Visualize spawn trees, cost, timelines from event log |
 
 ---
 
@@ -974,19 +1076,19 @@ Evolve/
 │   ├── agent.py            # LangGraph StateGraph: reason → tools → reason loop
 │   │                        #   AgentState, reason_node, tool_node, should_continue
 │   │                        #   build_agent_graph(), run_agent_graph()
-│   ├── blueprint.py        # AgentBlueprint schema + prompt compiler
+│   ├── blueprint.py        # AgentBlueprint, MemoryScope, SpawnBudget + prompt compiler
 │   ├── spawner.py          # Spawn logic: assessment, budget, reuse-first
 │   ├── lifecycle.py        # TTL heartbeat, hibernate, resurrect, death
-│   └── cost_tracker.py     # Budget tracking, model cost tables, token rollup
+│   └── cost_tracker.py     # Token-based budget tracking, subtree rollup
 │
 ├── memory/
 │   ├── blackboard.py       # Redis KV + Pub/Sub + Streams + cleanup
-│   ├── locks.py            # Redis Redlock — spawn budget concurrency control
+│   ├── locks.py            # Redis distributed lock — spawn budget concurrency control
 │   ├── registry.py         # MongoDB agent registry (DNA storage)
-│   ├── artifacts.py        # Object storage client (S3/Blob/MinIO)
-│   └── scoping.py          # MemoryScope, namespace logic
+│   ├── artifacts.py        # Object storage client (Local/S3)
+│   └── scoping.py          # MemoryScope helpers, namespace logic
 │
-├── logging/
+├── tracing/
 │   ├── event_logger.py     # Immutable event journal (MongoDB)
 │   ├── event_types.py      # Event type constants
 │   └── trace.py            # Spawn tree + critical path reconstruction
@@ -1000,18 +1102,30 @@ Evolve/
 ├── tools/
 │   └── tool_registry.py    # Tool definitions, access control, OpenAI-format specs
 │
-├── custom_loop/            # Legacy: original while-loop agent runtime (preserved)
-│   ├── agent.py            # Custom while-loop Agent class
-│   └── genesis.py          # Custom-loop GenesisAgent
+├── test/
+│   ├── custom_loop/        # Legacy: original while-loop agent runtime (preserved)
+│   │   ├── agent.py        # Custom while-loop Agent class
+│   │   └── genesis.py      # Custom-loop GenesisAgent
+│   ├── sample.md           # Sample test input
+│   └── website_content.yaml
 │
-├── dashboard/
-│   ├── app.py              # Streamlit dashboard
-│   ├── spawn_tree.py       # Tree visualization
-│   └── cost_report.py      # Cost analysis views
+├── tests/
+│   ├── conftest.py         # Shared fixtures
+│   ├── test_agent_graph.py
+│   ├── test_blueprint.py
+│   ├── test_lifecycle.py
+│   ├── test_spawner.py
+│   └── test_tool_registry.py
 │
-├── config.py               # Global caps, defaults, model pricing
+├── site/
+│   ├── index.html          # Landing page
+│   └── style.css           # Site styles
+│
+├── config.py               # Global caps, defaults, model routing, LiteLLM kwargs
 ├── main.py                 # CLI entry point
+├── pyproject.toml          # Project metadata and build config
 ├── requirements.txt
+├── README.md
 └── DESIGN.md               # This document
 ```
 
@@ -1149,10 +1263,40 @@ The graph topology is **structurally static** (`reason → tools → reason`) bu
 - [x] **Agent lifecycle** — TTL heartbeat, hibernate, resurrect, death state machine
 - [x] **Tool registry** — allowlist-based access control, restricted tools by depth
 - [x] **LangGraph refactor** — `StateGraph` with `reason → tools → reason` loop, checkpointing via `MemorySaver`
-- [x] **Prompt separation** — domain-specific prompt files in `evolve/prompts/`
-- [x] **Custom loop preserved** — legacy while-loop approach in `evolve/custom_loop/`
+- [x] **Prompt separation** — domain-specific prompt files in `prompts/`
+- [x] **Custom loop preserved** — legacy while-loop approach in `test/custom_loop/`
 
-### TODO: Dynamic Skill System
+### TODO: P0 — Latency & Performance
+
+- [ ] **Parallel child execution** — fan-out multiple `spawn_agent` tool calls via `asyncio.gather` instead of sequential await in `tool_node`
+- [ ] **Background event logging** — push `event_logger.log_event` calls to an async queue instead of awaiting on the hot path
+- [ ] **Batch MongoDB writes in `charge()`** — buffer `registry.update` + `event_logger.log_event` and flush periodically, not per LLM call
+- [ ] **Redis pipeline for `read_shared`/`read_mine`** — replace `scan_iter` + N individual `GET`s with `SCAN` + `MGET` pipeline
+- [ ] **Batch `rollup_subtree` reads** — replace N+1 sequential `find_by_id` calls with a single `$in` query for all children
+- [ ] **Cache compiled agent graph** — `build_agent_graph()` returns the same topology every time; build once, reuse across spawns
+- [ ] **Priority-aware LLM semaphore** — replace global `Semaphore(3)` with depth-aware queuing so parent agents aren't starved by children
+
+### TODO: P1 — Production Hardening
+
+- [ ] **LLM resilience** — retry with exponential backoff, model fallback chain (gpt-4o → claude-sonnet → gpt-4o-mini)
+- [ ] **Error recovery** — circuit breakers per agent, agent-level isolation (one agent crash doesn't kill session)
+- [ ] **Sandboxed code execution** — replace subprocess with container-based sandbox (gVisor/Firecracker) or sandboxed interpreter API
+- [ ] **Rate limiting** — per-model token/minute tracking matching provider rate limits
+- [ ] **Auth & multi-tenancy** — session isolation, API auth, per-tenant budget caps
+- [ ] **Real tool implementations** — wire up SerpAPI/Tavily for web_search, PDF parser for read_paper, etc.
+- [ ] **LangGraph PostgreSQL checkpointer** — replace MemorySaver with persistent checkpointer for crash recovery across restarts
+
+### TODO: P2 — Dashboard & Observability
+
+- [ ] **Observability** — OpenTelemetry traces, structured logging, Prometheus metrics for agent count, cost, latency
+- [ ] **Streamlit dashboard** — real-time session monitoring
+- [ ] **Spawn tree visualization** — interactive tree from event log spawn events
+- [ ] **Cost report views** — per-agent, per-session, per-model cost breakdowns
+- [ ] **Token usage heatmap** — which agents consumed the most tokens and why
+- [ ] **Replay mode** — step through a completed session event-by-event for post-mortem
+- [ ] **Scaling** — worker pool (Celery/Dramatiq) or containerized agents for horizontal scaling
+
+### TODO: P3 — Dynamic Skill System
 
 #### Phase 1 — Skill DB + Curated Skills
 - [ ] Design MongoDB `skills` collection schema (name, description, keywords, embedding, trust_level, body, assets, stats)
@@ -1164,7 +1308,7 @@ The graph topology is **structurally static** (`reason → tools → reason`) bu
 - [ ] Skill asset sandboxing — scripts run in subprocess with timeout, no network, workspace-restricted
 - [ ] Skill trust levels — `verified` | `community` | `discovered`; depth > 1 agents only use `verified`
 - [ ] Ship 3-5 curated starter skills (e.g., research, web-app-scaffold, data-analysis, code-review)
-- [ ] Add SKILL.md prompts to `evolve/prompts/` for skill-enriched system prompts
+- [ ] Add SKILL.md prompts to `prompts/` for skill-enriched system prompts
 
 #### Phase 2 — Mid-Run Skill Discovery
 - [ ] Add `search_skill` tool — agents can search the skill DB during execution (not just at spawn)
@@ -1187,25 +1331,4 @@ The graph topology is **structurally static** (`reason → tools → reason`) bu
 - [ ] Human review workflow — discovered/agent-authored skills queued for promotion to `community` or `verified`
 - [ ] Skill deprecation — flag skills with low success rates or old last-validated timestamps
 - [ ] Skill versioning — track version history, allow rollback
-
-### TODO: Production Hardening
-
-- [ ] **LLM resilience** — retry with exponential backoff, model fallback chain (gpt-4o → claude-sonnet → gpt-4o-mini)
-- [ ] **Error recovery** — circuit breakers per agent, agent-level isolation (one agent crash doesn't kill session)
-- [ ] **Sandboxed code execution** — replace subprocess with container-based sandbox (gVisor/Firecracker) or sandboxed interpreter API
-- [ ] **Observability** — OpenTelemetry traces, structured logging, Prometheus metrics for agent count, cost, latency
-- [ ] **Scaling** — worker pool (Celery/Dramatiq) or containerized agents for horizontal scaling
-- [ ] **Rate limiting** — per-model token/minute tracking matching provider rate limits
-- [ ] **Auth & multi-tenancy** — session isolation, API auth, per-tenant budget caps
-- [ ] **Real tool implementations** — wire up SerpAPI/Tavily for web_search, PDF parser for read_paper, etc.
-- [ ] **LangGraph PostgreSQL checkpointer** — replace MemorySaver with persistent checkpointer for crash recovery across restarts
-- [ ] **Parallel child execution** — fan-out multiple child graphs via `asyncio.gather` instead of sequential spawn
-
-### TODO: Dashboard & Observability
-
-- [ ] **Streamlit dashboard** — real-time session monitoring
-- [ ] **Spawn tree visualization** — interactive tree from event log spawn events
-- [ ] **Cost report views** — per-agent, per-session, per-model cost breakdowns
-- [ ] **Token usage heatmap** — which agents consumed the most tokens and why
-- [ ] **Replay mode** — step through a completed session event-by-event for post-mortem
-- [ ] **Skill usage analytics** — which skills are loaded most, success rates, agent ratings
+- [ ] Skill usage analytics — which skills are loaded most, success rates, agent ratings
