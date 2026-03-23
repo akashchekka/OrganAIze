@@ -266,7 +266,7 @@ def build_agent_graph() -> StateGraph:
     graph = StateGraph(AgentState)
 
     graph.add_node("reason", reason_node)
-    graph.add_node("tools", tool_node, retry=RetryPolicy(max_attempts=3))
+    graph.add_node("tools", tool_node, retry_policy=RetryPolicy(max_attempts=3))
 
     graph.set_entry_point("reason")
     graph.add_conditional_edges("reason", should_continue, {"tools": "tools", "end": END})
