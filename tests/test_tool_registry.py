@@ -72,22 +72,20 @@ class TestGetToolDescriptions:
         assert "web_search" in names
         assert "code_execute" in names
 
-    def test_always_includes_share_and_read_shared(self):
+    def test_only_requested_tools_returned(self):
         tools = get_tool_descriptions(["web_search"])
         names = [t["function"]["name"] for t in tools]
-        assert "share_finding" in names
-        assert "read_shared" in names
+        assert "web_search" in names
+        assert "spawn_agent" not in names
 
     def test_spawn_agent_included_when_allowed(self):
         tools = get_tool_descriptions(["spawn_agent"])
         names = [t["function"]["name"] for t in tools]
         assert "spawn_agent" in names
 
-    def test_empty_allowed_still_gets_base_tools(self):
+    def test_empty_allowed_returns_nothing(self):
         tools = get_tool_descriptions([])
-        names = [t["function"]["name"] for t in tools]
-        assert "share_finding" in names
-        assert "read_shared" in names
+        assert len(tools) == 0
 
     def test_unknown_tool_skipped(self):
         tools = get_tool_descriptions(["nonexistent_tool"])

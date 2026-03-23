@@ -3,14 +3,14 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Evolve</title>
+<title>OrganAIze</title>
 <link rel="stylesheet" href="style.css">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 </head>
 <body>
 
 <nav>
-  <div class="logo">Evolve</div>
+  <div class="logo">OrganAIze</div>
   <ul class="nav-links">
     <li><a href="#features">Features</a></li>
     <li><a href="#how">How It Works</a></li>
@@ -23,7 +23,7 @@
   <div class="container">
     <div class="hero-left">
       <h1>A self-assembling<br>AI team.</h1>
-      <p>Describe a goal. Evolve spawns specialist agents, coordinates them, and delivers the result.</p>
+      <p>Describe a goal. OrganAIze spawns specialist agents, coordinates them, and delivers the result.</p>
     </div>
     <div class="hero-visual"></div>
   </div>
@@ -47,16 +47,16 @@
         <p>Agents spawn sub-agents with depth limits, budget halving, and global caps.</p>
       </div>
       <div class="feature">
-        <h3>Shared Memory</h3>
-        <p>Redis-backed blackboard with pub/sub. Knowledge discovered by one agent is instantly available to all.</p>
+        <h3>Direct Output Flow</h3>
+        <p>Child agents return results directly to their parent via tool messages. No shared memory needed — outputs flow up the tree.</p>
       </div>
       <div class="feature">
-        <h3>Hibernate and Resurrect</h3>
-        <p>Agents hibernate with saved state when idle. Resume later with full context.</p>
+        <h3>Zero Dependencies</h3>
+        <p>No databases. No Redis. No MongoDB. Pure in-memory execution with file-based session output.</p>
       </div>
       <div class="feature">
         <h3>Cost Transparency</h3>
-        <p>Every LLM call tracked per-agent. Token usage rolls up through the agent tree.</p>
+        <p>Every LLM call tracked per-agent with session-wide token caps. Full breakdown in session.json.</p>
       </div>
       <div class="feature">
         <h3>Provider-Agnostic</h3>
@@ -105,10 +105,10 @@
     <h2 class="section-heading">Safety and Control</h2>
     <ul class="safety-list">
       <li>Tool allowlists per agent blueprint. No privilege escalation.</li>
-      <li>Session-wide USD budget cap. All agents halt when budget is exhausted.</li>
-      <li>Depth limit, budget halving, global agent cap. Distributed locks.</li>
-      <li>State checkpointed at every transition. Crash recovery without data loss.</li>
-      <li>Append-only event log. Every thought, tool call, and cost recorded.</li>
+      <li>Session-wide token cap. All agents halt when budget is exhausted.</li>
+      <li>Depth limit, budget halving, global agent cap. No runaway spawning.</li>
+      <li>Restricted tools blocked below configurable depth. Defense in depth.</li>
+      <li>State checkpointed at every graph transition via LangGraph MemorySaver.</li>
     </ul>
     </div>
   </div>
@@ -119,38 +119,35 @@
   <div class="container">
     <div class="glass">
     <h2 class="section-heading">Sample Output</h2>
-    <div class="terminal" style="max-width:680px">
+    <div class="terminal" style="max-width:780px">
       <div class="terminal-bar"><span></span><span></span><span></span></div>
-      <div class="terminal-body" style="white-space:pre;overflow-x:auto"><span class="g">Evolve - Starting session</span>
-   Goal:   Build an app that converts floor plans into realistic images
-   Budget: $5.00
+      <div class="terminal-body" style="white-space:pre;overflow-x:auto"><span class="g">OrganAIze - Starting session</span>
+   Goal:   Create a comprehensive report on quantum computing
    Model:  azure/gpt-4o
 
-   Session complete. Agents spawned: <span class="w">6</span>
+<span class="w">11:35:31</span> | genesis    | Spawning child <span class="g">QuantumHardwareResearcher</span> (researcher, depth=1)
+<span class="w">11:35:31</span> | genesis    | Spawning child <span class="g">QuantumAlgorithmsExplainer</span> (summarizer, depth=1)
+<span class="w">11:35:31</span> | genesis    | Spawning child <span class="g">QuantumCybersecurityAnalyst</span> (critic, depth=1)
+<span class="w">11:35:31</span> | genesis    | Spawning child <span class="g">QuantumAdvantagePredictor</span> (pm, depth=1)
+           <span class="w">&#8593; All 4 spawned in parallel at the same second</span>
 
-   Tokens: 27,600  |  LLM calls: 14  |  Cost: <span class="g">$0.0730</span>
+<span class="w">11:35:37</span> | agent      | QuantumCybersecurityAnalyst completed (4,561 chars)
+<span class="w">11:35:37</span> | agent      | QuantumAlgorithmsExplainer completed (2,975 chars)
+<span class="w">11:35:38</span> | agent      | QuantumAdvantagePredictor completed (3,180 chars)
+<span class="w">11:35:41</span> | agent      | QuantumHardwareResearcher completed (1,536 chars)
+<span class="w">11:36:03</span> | genesis    | Genesis-Orchestrator completed (10,234 chars)
 
-   <span class="w">Genesis-Orchestrator</span> (tokens=6,000, cost=$0.0180)
-     ResearchAgent-CV (tokens=4,200, cost=$0.0120)
-     ArchitectAgent (tokens=8,000, cost=$0.0230)
-       FrontendAgent (tokens=3,200, cost=$0.0090)
-       BackendAgent (tokens=6,000, cost=$0.0110)
-     PMAgent (tokens=500, cost=$0.0000)</div>
-    </div>
-    </div>
-  </div>
-</section>
+   Session complete. Agents spawned: <span class="w">5</span>
 
-<!-- Metrics -->
-<section id="metrics">
-  <div class="container">
-    <div class="glass">
-    <h2 class="section-heading">By the Numbers</h2>
-    <div class="metrics-row">
-      <div class="metric"><div class="val">6-20</div><div class="lbl">Agents per session</div></div>
-      <div class="metric"><div class="val">&lt;$0.10</div><div class="lbl">Cost per complex task</div></div>
-      <div class="metric"><div class="val">14</div><div class="lbl">LLM calls for 6 agents</div></div>
-      <div class="metric"><div class="val">100%</div><div class="lbl">Cost attribution</div></div>
+   Tokens: 30,463  |  LLM calls: 11  |  Remaining: <span class="g">69,537</span>
+
+   <span class=\"g\">&#10003;</span> <span class=\"w\">Genesis-Orchestrator</span> (orchestrator, tokens=26,350)
+     <span class=\"g\">&#10003;</span> QuantumHardwareResearcher (researcher, tokens=1,094)
+     <span class=\"g\">&#10003;</span> QuantumAlgorithmsExplainer (summarizer, tokens=922)
+     <span class=\"g\">&#10003;</span> QuantumCybersecurityAnalyst (critic, tokens=1,179)
+     <span class=\"g\">&#10003;</span> QuantumAdvantagePredictor (pm, tokens=918)
+
+   Total time: <span class="g">38 seconds</span> (4 agents ran in parallel)</div>
     </div>
     </div>
   </div>
@@ -164,14 +161,14 @@
     <div class="table-wrap">
       <table>
         <thead>
-          <tr><th>Feature</th><th>Evolve</th><th>AutoGen</th><th>CrewAI</th><th>LangGraph</th></tr>
+          <tr><th>Feature</th><th>OrganAIze</th><th>AutoGen</th><th>CrewAI</th><th>LangGraph</th></tr>
         </thead>
         <tbody>
           <tr><td>Self-organizing</td><td>Yes</td><td>No</td><td>No</td><td>No</td></tr>
           <tr><td>Dynamic spawning</td><td>Yes</td><td>No</td><td>No</td><td>No</td></tr>
-          <tr><td>Cost tracking</td><td>Per-agent tree rollup</td><td>Basic</td><td>Basic</td><td>None</td></tr>
-          <tr><td>Shared memory</td><td>Redis blackboard</td><td>Message passing</td><td>Shared context</td><td>State graph</td></tr>
-          <tr><td>Hibernate / Resume</td><td>Yes</td><td>No</td><td>No</td><td>Partial</td></tr>
+          <tr><td>Cost tracking</td><td>Per-agent with session cap</td><td>Basic</td><td>Basic</td><td>None</td></tr>
+          <tr><td>Output flow</td><td>Direct parent → child</td><td>Message passing</td><td>Shared context</td><td>State graph</td></tr>
+          <tr><td>Zero DB dependencies</td><td>Yes</td><td>No</td><td>No</td><td>Yes</td></tr>
           <tr><td>Provider-agnostic</td><td>Yes</td><td>Yes</td><td>Limited</td><td>Yes</td></tr>
         </tbody>
       </table>
@@ -184,12 +181,12 @@
 <section id="investors">
   <div class="container">
     <div class="glass">
-    <h2 class="section-heading" style="margin-bottom:12px">Why Evolve</h2>
-    <p class="section-subtitle">The agentic AI market is projected to reach $65B+ by 2030. Evolve agents self-organize based on the problem, not the pipeline.</p>
+    <h2 class="section-heading" style="margin-bottom:12px">Why OrganAIze</h2>
+    <p class="section-subtitle">The agentic AI market is projected to reach $65B+ by 2030. OrganAIze agents self-organize based on the problem, not the pipeline.</p>
     <div class="investor-grid">
       <div class="inv-card">
         <h3>Self-Organizing, Not Pre-Scripted</h3>
-        <p>Competitors require developers to define agent graphs. Evolve agents build their own team on-the-fly.</p>
+        <p>Competitors require developers to define agent graphs. OrganAIze agents build their own team on-the-fly.</p>
       </div>
       <div class="inv-card">
         <h3>Built-In Cost Controls</h3>
@@ -201,57 +198,10 @@
       </div>
       <div class="inv-card">
         <h3>Enterprise Safety</h3>
-        <p>Tool allowlists, spawn limits, distributed locking, immutable audit trails. Built for regulated industries.</p>
+        <p>Tool allowlists, spawn limits, token caps, restricted tool depth controls. Built for regulated industries.</p>
       </div>
     </div>
 
-    </div>
-  </div>
-</section>
-
-<!-- Roadmap -->
-<section id="roadmap">
-  <div class="container">
-    <div class="glass">
-    <h2 class="section-heading">Roadmap</h2>
-    <div class="roadmap">
-      <div class="phase">
-        <div class="phase-label">Phase 1</div>
-        <h3>Skill DB</h3>
-        <ul>
-          <li>Skill registry with keyword and embedding search</li>
-          <li>Skill matching at spawn time</li>
-          <li>Curated starter skills</li>
-        </ul>
-      </div>
-      <div class="phase">
-        <div class="phase-label">Phase 2</div>
-        <h3>Enterprise</h3>
-        <ul>
-          <li>Multi-user sessions with RBAC</li>
-          <li>Human-in-the-loop approval gates</li>
-          <li>Slack, Jira, GitHub integrations</li>
-        </ul>
-      </div>
-      <div class="phase">
-        <div class="phase-label">Phase 3</div>
-        <h3>Platform</h3>
-        <ul>
-          <li>Hosted SaaS with usage-based billing</li>
-          <li>Skill marketplace</li>
-          <li>SOC 2 and enterprise SSO</li>
-        </ul>
-      </div>
-      <div class="phase">
-        <div class="phase-label">Phase 4</div>
-        <h3>Intelligence</h3>
-        <ul>
-          <li>Cross-session agent memory</li>
-          <li>Automatic model selection</li>
-          <li>Self-improving prompts</li>
-        </ul>
-      </div>
-    </div>
     </div>
   </div>
 </section>
@@ -260,7 +210,7 @@
 <section class="cta">
   <div class="container">
     <div class="glass cta-glass">
-    <h2>Ready to let AI evolve?</h2>
+    <h2>Ready to let AI organize?</h2>
     <p>Engineers: Clone the repo. Set your API key. Give it a goal.</p>
     <p>Investors: Let's talk about autonomous AI workforces.</p>
     <div class="hero-buttons cta-buttons">
@@ -275,7 +225,7 @@
   <a href="#">GitHub</a>
   <a href="#">Docs</a>
   <a href="#">MIT License</a>
-  <p style="margin-top:12px">Evolve 2026</p>
+  <p style="margin-top:12px">OrganAIze 2026</p>
 </footer>
 
 <script>

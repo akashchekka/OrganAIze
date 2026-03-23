@@ -21,12 +21,6 @@ RULES:
 - Risk tolerance: {risk_tolerance}
 {spawn_section}
 
-COMMUNICATION:
-- Write your working notes to your private namespace: {write_ns}
-- You can read from these namespaces: {read_ns}
-- Share policy: {share_policy}
-- When you produce a conclusion worth sharing with other agents, use the share() function.
-
 IMPORTANT:
 - Think step by step before acting.
 - If you are uncertain, state your confidence level.

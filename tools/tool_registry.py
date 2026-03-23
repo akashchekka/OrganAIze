@@ -180,33 +180,6 @@ def get_tool_descriptions(allowed_tools: list[str]) -> list[dict]:
                 },
             },
         },
-        "share_finding": {
-            "type": "function",
-            "function": {
-                "name": "share_finding",
-                "description": "Share a finding with all other agents via the shared blackboard.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "key": {"type": "string", "description": "A unique key for this finding"},
-                        "value": {"type": "string", "description": "The finding content"},
-                    },
-                    "required": ["key", "value"],
-                },
-            },
-        },
-        "read_shared": {
-            "type": "function",
-            "function": {
-                "name": "read_shared",
-                "description": "Read findings shared by other agents.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {"pattern": {"type": "string", "description": "Key pattern to match (default: *)"}},
-                    "required": [],
-                },
-            },
-        },
         "spawn_agent": {
             "type": "function",
             "function": {
@@ -231,13 +204,8 @@ def get_tool_descriptions(allowed_tools: list[str]) -> list[dict]:
         },
     }
 
-    # Always include share_finding and read_shared
     result = []
-    base_tools = {"share_finding", "read_shared"}
     for tool in allowed_tools:
         if tool in descriptions:
             result.append(descriptions[tool])
-    for bt in base_tools:
-        if bt in descriptions and bt not in allowed_tools:
-            result.append(descriptions[bt])
     return result

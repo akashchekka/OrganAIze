@@ -4,7 +4,6 @@ import pytest
 
 from core.blueprint import (
     AgentBlueprint,
-    MemoryScope,
     SpawnBudget,
     compile_system_prompt,
 )
@@ -41,19 +40,16 @@ class TestAgentBlueprint:
         assert bp.lineage == [bp.agent_id]
 
     def test_auto_model_selection(self):
+        from config import ROLE_MODEL_DEFAULTS
         bp = AgentBlueprint(role="orchestrator")
-        assert bp.model == "azure/gpt-4o"
+        assert bp.model == ROLE_MODEL_DEFAULTS["orchestrator"]
 
         bp_qa = AgentBlueprint(role="qa")
-        assert bp_qa.model == "azure/gpt-4o-mini"
+        assert bp_qa.model == ROLE_MODEL_DEFAULTS["qa"]
 
     def test_explicit_model_overrides_default(self):
         bp = AgentBlueprint(role="qa", model="gpt-4o")
         assert bp.model == "gpt-4o"
-
-    def test_memory_scope_auto_set(self):
-        bp = AgentBlueprint(agent_id="abc-123")
-        assert bp.memory_scope.write_ns == "agent:abc-123"
 
     def test_lineage_auto_set(self):
         bp = AgentBlueprint(agent_id="agent-x")
@@ -94,8 +90,3 @@ class TestCompileSystemPrompt:
     def test_contains_denied_tools(self, sample_blueprint):
         prompt = compile_system_prompt(sample_blueprint)
         assert "file_delete" in prompt
-
-    def test_contains_communication_section(self, sample_blueprint):
-        prompt = compile_system_prompt(sample_blueprint)
-        assert "agent:test-agent-001" in prompt
-        assert "auto_conclusions" in prompt

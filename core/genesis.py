@@ -1,56 +1,44 @@
-"""Genesis Agent — the top-level orchestrator that receives user goals and evolves.
+"""Genesis Agent — the top-level orchestrator that receives user goals.
 
 Uses LangGraph for the agent runtime. The Genesis agent is itself a graph node
 that can spawn child agent graphs via the spawn_agent tool.
+
+All output is written to a session folder under ``output/<session_id>/``:
+  - session.json  — blueprint, token summary, agent tree
+  - output.md     — final synthesized markdown output
 """
 
 from __future__ import annotations
 
-import asyncio
+import json
 import logging
 import uuid
-from typing import Any
+from pathlib import Path
 
-import redis.asyncio as aioredis
 from langgraph.checkpoint.memory import MemorySaver
-from motor.motor_asyncio import AsyncIOMotorClient
 
 from config import (
     DEFAULT_LLM_MODEL,
     DEFAULT_MAX_STEPS,
-    DEFAULT_TTL_SECONDS,
     GENESIS_SPAWN_BUDGET,
     MAX_DEPTH,
     MAX_GLOBAL_AGENTS,
     MAX_SESSION_TOKENS,
-    MONGO_DB_NAME,
-    MONGO_URI,
-    REDIS_URL,
+    OUTPUT_DIR,
 )
 from core.agent import run_agent_graph
-from core.blueprint import (
-    AgentBlueprint,
-    MemoryScope,
-    SpawnBudget,
-    compile_system_prompt,
-)
+from core.blueprint import AgentBlueprint, SpawnBudget
 from core.cost_tracker import CostTracker
 from core.spawner import Spawner
-from tracing.event_logger import EventLogger
-from tracing.event_types import AGENT_SPAWNED
-from memory.locks import SpawnLock
-from memory.registry import AgentRegistry
 from prompts.genesis import GENESIS_PERSONA
 
-logger = logging.getLogger("evolve.genesis")
+logger = logging.getLogger("organaize.genesis")
 
 
 class GenesisAgent:
     """Top-level orchestrator. Receives a user goal, decomposes, spawns, synthesizes.
 
-    The Genesis agent runs as a LangGraph StateGraph. When it calls the
-    spawn_agent tool, child agents are themselves full LangGraph instances
-    that run to completion and return their output as tool results.
+    Pure in-memory — no MongoDB, no Redis. Session output is written to disk.
     """
 
     def __init__(
@@ -62,158 +50,90 @@ class GenesisAgent:
         self.model = model
         self.max_session_tokens = max_session_tokens
 
-        self._mongo_client: AsyncIOMotorClient | None = None
-        self._redis: aioredis.Redis | None = None
-        self.registry: AgentRegistry | None = None
-        self.event_logger: EventLogger | None = None
-        self.cost_tracker: CostTracker | None = None
-        self.spawner: Spawner | None = None
-        self._checkpointer: MemorySaver | None = None
-
-    async def _init_infrastructure(self) -> None:
-        """Connect to MongoDB and Redis, ensure indexes."""
-        logger.info("Connecting to MongoDB at %s", MONGO_URI)
-        self._mongo_client = AsyncIOMotorClient(MONGO_URI)
-        db = self._mongo_client[MONGO_DB_NAME]
-
-        logger.info("Connecting to Redis at %s", REDIS_URL)
-        self._redis = aioredis.from_url(REDIS_URL, decode_responses=True)
-
-        self.registry = AgentRegistry(db)
-        await self.registry.ensure_indexes()
-
-        self.event_logger = EventLogger(db)
-        await self.event_logger.ensure_indexes()
-
-        self.cost_tracker = CostTracker(
-            registry=self.registry,
-            event_logger=self.event_logger,
-            session_id=self.session_id,
-            max_tokens=self.max_session_tokens,
-        )
-
-        spawn_lock = SpawnLock(self._redis)
-        self.spawner = Spawner(
-            registry=self.registry,
-            event_logger=self.event_logger,
-            cost_tracker=self.cost_tracker,
-            spawn_lock=spawn_lock,
-            session_id=self.session_id,
-        )
-
-        # Shared checkpointer for all agents in this session
+        self.cost_tracker = CostTracker(max_tokens=max_session_tokens)
+        self.spawner = Spawner(session_id=self.session_id)
         self._checkpointer = MemorySaver()
-        logger.info("Infrastructure initialized for session %s", self.session_id)
 
     async def run(self, user_goal: str) -> dict:
-        """Execute the full Evolve pipeline for a user goal.
+        """Execute the full OrganAIze pipeline for a user goal.
 
         Returns a dict with:
         - output: The final synthesized response
         - session_id: The session identifier
         - token_summary: Per-agent and total token usage
         - agents_spawned: Number of agents that were created
-        - agent_tree: Hierarchical view of all agents
         """
-        await self._init_infrastructure()
+        logger.info("Session %s started | goal='%s' | model=%s | max_tokens=%d",
+                     self.session_id, user_goal[:100], self.model, self.max_session_tokens)
 
-        try:
-            logger.info("Session %s started | goal='%s' | model=%s | max_tokens=%d",
-                        self.session_id, user_goal[:100], self.model, self.max_session_tokens)
-            # 1. Create the Genesis agent blueprint
-            genesis_blueprint = AgentBlueprint(
-                name="Genesis-Orchestrator",
-                role="orchestrator",
-                persona=GENESIS_PERSONA,
-                expertise=["decomposition", "orchestration", "synthesis"],
-                tools_allowed=["spawn_agent", "web_search", "share_finding", "read_shared"],
-                tools_denied=[],
-                model=self.model,
-                memory_scope=MemoryScope(
-                    write_ns="agent:genesis",
-                    read_ns=["shared"],
-                    share_policy="full_transparency",
-                ),
-                ttl_seconds=DEFAULT_TTL_SECONDS * 2,
-                max_steps=DEFAULT_MAX_STEPS * 2,
-                priority="critical",
-                spawn_budget=SpawnBudget(
-                    max_children=GENESIS_SPAWN_BUDGET,
-                    max_depth_remaining=MAX_DEPTH,
-                    remaining_global=MAX_GLOBAL_AGENTS,
-                ),
-                task=user_goal,
-                success_criteria="Fully address the user's goal by orchestrating specialist agents and synthesizing their outputs.",
-                output_format="markdown",
-                depth=0,
-            )
+        # 1. Create the Genesis agent blueprint
+        genesis_blueprint = AgentBlueprint(
+            name="Genesis-Orchestrator",
+            role="orchestrator",
+            persona=GENESIS_PERSONA,
+            expertise=["decomposition", "orchestration", "synthesis"],
+            tools_allowed=["spawn_agent", "web_search"],
+            tools_denied=[],
+            model=self.model,
+            max_steps=DEFAULT_MAX_STEPS * 2,
+            spawn_budget=SpawnBudget(
+                max_children=GENESIS_SPAWN_BUDGET,
+                max_depth_remaining=MAX_DEPTH,
+                remaining_global=MAX_GLOBAL_AGENTS,
+            ),
+            task=user_goal,
+            success_criteria="Fully address the user's goal by orchestrating specialist agents and synthesizing their outputs.",
+            output_format="markdown",
+            depth=0,
+        )
 
-            # Register genesis in MongoDB
-            await self.registry.register(
-                genesis_blueprint, session_id=self.session_id, parent_id=None
-            )
-            system_prompt = compile_system_prompt(genesis_blueprint)
-            await self.registry.update(
-                genesis_blueprint.agent_id, system_prompt_compiled=system_prompt
-            )
+        # 2. Run the genesis agent as a LangGraph
+        logger.info("Running Genesis agent graph (id=%s)", genesis_blueprint.agent_id)
+        output = await run_agent_graph(
+            blueprint=genesis_blueprint,
+            session_id=self.session_id,
+            cost_tracker=self.cost_tracker,
+            spawner=self.spawner,
+            checkpointer=self._checkpointer,
+        )
 
-            # Log genesis spawn
-            await self.event_logger.log_event(
-                session_id=self.session_id,
-                agent_id=genesis_blueprint.agent_id,
-                agent_name=genesis_blueprint.name,
-                depth=0,
-                event_type=AGENT_SPAWNED,
-                payload={
-                    "parent_id": None,
-                    "role": "orchestrator",
-                    "task": user_goal,
-                    "model": self.model,
-                    "spawn_reason": "user_request",
-                },
-            )
+        # 3. Gather session summary
+        token_summary = self.cost_tracker.get_session_summary()
+        agents_spawned = self.spawner.agents_created + 1  # +1 for genesis itself
 
-            # 2. Run the genesis agent as a LangGraph
-            logger.info("Running Genesis agent graph (id=%s)", genesis_blueprint.agent_id)
-            output = await run_agent_graph(
-                blueprint=genesis_blueprint,
-                session_id=self.session_id,
-                cost_tracker=self.cost_tracker,
-                event_logger=self.event_logger,
-                blackboard_redis=self._redis,
-                spawner=self.spawner,
-                checkpointer=self._checkpointer,
-            )
+        logger.info("Session %s complete | agents=%d | tokens=%d",
+                     self.session_id, agents_spawned, token_summary["total_tokens"])
 
-            # 3. Gather session summary
-            token_summary = self.cost_tracker.get_session_summary()
-            all_agents = await self.registry.get_session_agents(self.session_id)
-            logger.info("Session %s complete | agents=%d | tokens=%d",
-                        self.session_id, len(all_agents),
-                        token_summary["total_tokens"])
+        result = {
+            "output": output,
+            "session_id": self.session_id,
+            "token_summary": token_summary,
+            "agents_spawned": agents_spawned,
+        }
 
-            return {
-                "output": output,
-                "session_id": self.session_id,
-                "token_summary": token_summary,
-                "agents_spawned": len(all_agents),
-                "agent_tree": [
-                    {
-                        "id": a["_id"],
-                        "name": a["name"],
-                        "role": a["blueprint"]["role"],
-                        "depth": a["depth"],
-                        "status": a["status"],
-                        "token_usage": a.get("token_usage", {}),
-                        "subtree_token_usage": a.get("subtree_token_usage", {}),
-                    }
-                    for a in all_agents
-                ],
-            }
+        # 4. Write session output to disk
+        self._write_session_output(result, user_goal)
 
-        finally:
-            logger.info("Closing connections for session %s", self.session_id)
-            if self._redis:
-                await self._redis.aclose()
-            if self._mongo_client:
-                self._mongo_client.close()
+        return result
+
+    def _write_session_output(self, result: dict, user_goal: str) -> None:
+        """Write session.json and output.md to ``output/<session_id>/``."""
+        session_dir = Path(OUTPUT_DIR) / self.session_id
+        session_dir.mkdir(parents=True, exist_ok=True)
+
+        # session.json — metadata + token summary
+        session_meta = {
+            "session_id": self.session_id,
+            "goal": user_goal,
+            "model": self.model,
+            "token_summary": result["token_summary"],
+            "agents_spawned": result["agents_spawned"],
+        }
+        session_json_path = session_dir / "session.json"
+        session_json_path.write_text(json.dumps(session_meta, indent=2), encoding="utf-8")
+
+        # output.md — final synthesized output
+        output_md_path = session_dir / "output.md"
+        output_md_path.write_text(result["output"], encoding="utf-8")
+
+        logger.info("Session output written to %s", session_dir)

@@ -28,6 +28,9 @@ Thumbs.db
 # Pytest
 .pytest_cache/
 
+# Session output
+output/
+
 # Artifacts
 artifacts/
 

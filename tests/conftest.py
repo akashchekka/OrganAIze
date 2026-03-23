@@ -1,11 +1,8 @@
-"""Shared test fixtures for the Evolve test suite."""
-
-import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+"""Shared test fixtures for the OrganAIze test suite."""
 
 import pytest
 
-from core.blueprint import AgentBlueprint, MemoryScope, SpawnBudget
+from core.blueprint import AgentBlueprint, SpawnBudget
 
 
 @pytest.fixture
@@ -20,12 +17,6 @@ def sample_blueprint() -> AgentBlueprint:
         tools_allowed=["web_search", "code_execute"],
         tools_denied=["file_delete"],
         model="azure/gpt-4o",
-        memory_scope=MemoryScope(
-            write_ns="agent:test-agent-001",
-            read_ns=["shared", "agent:test-agent-001"],
-            share_policy="auto_conclusions",
-        ),
-        ttl_seconds=60,
         max_steps=10,
         spawn_budget=SpawnBudget(max_children=4, max_depth_remaining=3, remaining_global=18),
         task="Write unit tests",
@@ -44,10 +35,9 @@ def genesis_blueprint() -> AgentBlueprint:
         role="orchestrator",
         persona="Master orchestrator",
         expertise=["decomposition", "orchestration"],
-        tools_allowed=["spawn_agent", "web_search", "share_finding", "read_shared"],
+        tools_allowed=["spawn_agent", "web_search"],
         tools_denied=[],
         model="azure/gpt-4o",
-        ttl_seconds=600,
         max_steps=60,
         spawn_budget=SpawnBudget(max_children=8, max_depth_remaining=4, remaining_global=20),
         task="Build an app",
@@ -74,46 +64,3 @@ def leaf_blueprint() -> AgentBlueprint:
         success_criteria="Function works",
         depth=4,
     )
-
-
-@pytest.fixture
-def mock_registry():
-    """Mock AgentRegistry for tests that don't need MongoDB."""
-    registry = AsyncMock()
-    registry.register = AsyncMock(return_value={"_id": "test-agent-001"})
-    registry.find_by_id = AsyncMock(return_value=None)
-    registry.update = AsyncMock()
-    registry.add_child = AsyncMock()
-    registry.increment_steps = AsyncMock(return_value=1)
-    registry.count_alive = AsyncMock(return_value=3)
-    registry.find_agent = AsyncMock(return_value=None)
-    registry.get_session_agents = AsyncMock(return_value=[])
-    return registry
-
-
-@pytest.fixture
-def mock_event_logger():
-    """Mock EventLogger for tests that don't need MongoDB."""
-    logger = AsyncMock()
-    logger.log = AsyncMock()
-    logger.log_event = AsyncMock()
-    logger.ensure_indexes = AsyncMock()
-    return logger
-
-
-@pytest.fixture
-def mock_redis():
-    """Mock async Redis client."""
-    redis = AsyncMock()
-    redis.setex = AsyncMock()
-    redis.exists = AsyncMock(return_value=True)
-    redis.delete = AsyncMock()
-    redis.ttl = AsyncMock(return_value=200)
-    redis.expire = AsyncMock()
-    redis.set = AsyncMock()
-    redis.get = AsyncMock(return_value=None)
-    redis.publish = AsyncMock()
-    redis.keys = AsyncMock(return_value=[])
-    redis.scan_iter = MagicMock(return_value=iter([]))
-    redis.lock = MagicMock()
-    return redis

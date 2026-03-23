@@ -1,8 +1,8 @@
-"""Evolve — Self-Organizing Agentic OS
+"""OrganAIze — Self-Organizing Agentic AI
 
 Usage:
     python main.py "Build an app that converts floor plans into realistic images"
-    python main.py --budget 2.00 --model gpt-4o "Your goal here"
+    python main.py --max-tokens 100000 --model gpt-4o "Your goal here"
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from core.genesis import GenesisAgent
 
 
 def setup_logging(verbose: bool = False) -> None:
-    """Configure Python logging for the Evolve system."""
+    """Configure Python logging for OrganAIze."""
     level = logging.DEBUG if verbose else logging.INFO
     logging.basicConfig(
         level=level,
@@ -31,36 +31,10 @@ def setup_logging(verbose: bool = False) -> None:
     logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
-def print_agent_tree(agents: list[dict], indent: int = 0) -> None:
-    """Pretty-print the agent hierarchy."""
-    # Build a quick lookup
-    by_depth: dict[int, list[dict]] = {}
-    for a in agents:
-        by_depth.setdefault(a["depth"], []).append(a)
-
-    for depth in sorted(by_depth.keys()):
-        for agent in by_depth[depth]:
-            prefix = "  " * depth + ("├── " if depth > 0 else "")
-            status_icon = {
-                "completed": "✓",
-                "alive": "⟳",
-                "hibernated": "💤",
-                "dead": "✗",
-            }.get(agent["status"], "?")
-
-            tokens = agent.get("token_usage", {})
-            total_tokens = tokens.get("total_tokens", 0)
-
-            print(
-                f"{prefix}[{status_icon}] {agent['name']} "
-                f"(role={agent['role']}, tokens={total_tokens:,})"
-            )
-
-
 def print_summary(result: dict) -> None:
     """Print session results and token summary."""
     print("\n" + "=" * 70)
-    print("EVOLVE SESSION COMPLETE")
+    print("ORGANAIZE SESSION COMPLETE")
     print("=" * 70)
 
     print(f"\nSession ID: {result['session_id']}")
@@ -74,18 +48,17 @@ def print_summary(result: dict) -> None:
     print(f"Total LLM calls:     {summary['total_llm_calls']}")
     print(f"Tokens remaining:    {summary['tokens_remaining']:,}")
 
-    print(f"\n--- Agent Tree ---")
-    print_agent_tree(result.get("agent_tree", []))
-
     print(f"\n--- Final Output ---")
     print(result["output"][:5000])
     if len(result.get("output", "")) > 5000:
         print("\n...[output truncated]")
 
 
-async def async_main(goal: str, max_tokens: int, model: str, verbose: bool) -> None:
+async def async_main(goal: str, max_tokens: int, model: str | None, verbose: bool) -> None:
     setup_logging(verbose=verbose)
-    print(f"🧬 Evolve — Starting session")
+    from config import DEFAULT_LLM_MODEL
+    model = model or DEFAULT_LLM_MODEL
+    print(f"OrganAIze - Starting session")
     print(f"   Goal:       {goal}")
     print(f"   Max tokens: {max_tokens:,}")
     print(f"   Model:      {model}")
@@ -98,7 +71,7 @@ async def async_main(goal: str, max_tokens: int, model: str, verbose: bool) -> N
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Evolve — Self-Organizing Agentic OS",
+        description="OrganAIze — Self-Organizing Agentic AI",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("goal", help="The user goal to achieve")
@@ -110,8 +83,8 @@ def main():
     )
     parser.add_argument(
         "--model",
-        default="azure/gpt-4o",
-        help="LLM model for the genesis agent (default: azure/gpt-4o)",
+        default=None,
+        help="LLM model for the genesis agent (default: from .env or azure/gpt-4o)",
     )
     parser.add_argument(
         "--verbose", "-v",
