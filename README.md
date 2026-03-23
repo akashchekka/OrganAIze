@@ -82,6 +82,13 @@ Total tokens:        30,463
 Total LLM calls:     11
 Tokens remaining:    69,537
 
+--- Agent Tree ---
+[✓] Genesis-Orchestrator (role=orchestrator, tokens=26,350)
+  ├── [✓] QuantumHardwareResearcher (role=researcher, tokens=1,094)
+  ├── [✓] QuantumAlgorithmsExplainer (role=summarizer, tokens=922)
+  ├── [✓] QuantumCybersecurityAnalyst (role=critic, tokens=1,179)
+  └── [✓] QuantumAdvantagePredictor (role=pm, tokens=918)
+
 Total time: 38 seconds (4 agents ran in parallel)
 ```
 
