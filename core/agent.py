@@ -25,6 +25,7 @@ from langchain_core.messages import (
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
+from langgraph.types import RetryPolicy
 from langchain_core.runnables import RunnableConfig
 
 import litellm
@@ -265,7 +266,7 @@ def build_agent_graph() -> StateGraph:
     graph = StateGraph(AgentState)
 
     graph.add_node("reason", reason_node)
-    graph.add_node("tools", tool_node)
+    graph.add_node("tools", tool_node, retry=RetryPolicy(max_attempts=3))
 
     graph.set_entry_point("reason")
     graph.add_conditional_edges("reason", should_continue, {"tools": "tools", "end": END})
