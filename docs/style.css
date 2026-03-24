@@ -23,8 +23,9 @@ nav{
 .container{max-width:960px;margin:0 auto;padding:0 24px}
 
 /* Sections */
-section{padding:100px 0}
+section{padding:48px 0}
 section+section{border-top:none}
+#features{padding-top:120px}
 
 /* Glass card for content sections */
 .glass{
@@ -33,16 +34,16 @@ section+section{border-top:none}
   -webkit-backdrop-filter:blur(12px);
   border:1px solid rgba(255,255,255,.5);
   border-radius:24px;
-  padding:56px 48px;
-  margin-bottom:32px;
+  padding:36px 40px;
+  margin-bottom:16px;
   box-shadow:0 4px 30px rgba(0,0,0,.04);
   position:relative;z-index:1;
   isolation:isolate;
 }
 
 /* Hero */
-.hero{padding:80px 0 100px}
-.hero .container{display:grid;grid-template-columns:1fr 1fr;gap:48px;align-items:center}
+.hero{padding:140px 0 48px}
+.hero .container{text-align:center}
 .hero h1{
   font-size:clamp(2.4rem,5vw,3.8rem);
   font-weight:800;letter-spacing:-.03em;
@@ -50,7 +51,7 @@ section+section{border-top:none}
 }
 .hero p{
   font-size:1.1rem;color:#444;
-  max-width:480px;margin-bottom:40px;
+  max-width:480px;margin:0 auto 40px;
 }
 .hero-buttons{display:flex;gap:12px;flex-wrap:wrap}
 .hero-visual{display:none}
@@ -112,13 +113,6 @@ section{position:relative}
 }
 .safety-list li::before{content:'-';position:absolute;left:0;color:#1a1a1a}
 
-/* Comparison */
-.table-wrap{overflow-x:auto}
-table{width:100%;border-collapse:collapse;font-size:.85rem}
-th,td{padding:12px 16px;text-align:left;border-bottom:1px solid rgba(0,0,0,.08)}
-th{font-weight:700;font-size:.8rem;text-transform:uppercase;letter-spacing:.04em;color:#666}
-td:first-child{font-weight:600}
-
 /* Investors */
 .investor-grid{display:grid;grid-template-columns:1fr 1fr;gap:32px}
 .inv-card h3{font-size:1rem;font-weight:700;margin-bottom:6px}
@@ -132,7 +126,7 @@ footer{
 footer a{color:#444;margin:0 12px}
 
 /* Section headings */
-.section-heading{font-size:1.6rem;font-weight:800;margin-bottom:48px}
+.section-heading{font-size:1.6rem;font-weight:800;margin-bottom:24px}
 
 /* Responsive */
 @media(max-width:768px){
@@ -141,7 +135,7 @@ footer a{color:#444;margin:0 12px}
   .features,.investor-grid{grid-template-columns:1fr}
   .steps{grid-template-columns:1fr 1fr}
   .safety-list{columns:1}
-  section{padding:72px 0}
+  section{padding:36px 0}
 }
 @media(max-width:480px){
   .steps{grid-template-columns:1fr}
