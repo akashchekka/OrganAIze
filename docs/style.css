@@ -42,8 +42,8 @@ section+section{border-top:none}
 }
 
 /* Hero */
-.hero{padding:140px 0 48px}
-.hero .container{text-align:center}
+.hero{padding:0;min-height:100vh;display:flex;align-items:center;justify-content:center}
+.hero .container{text-align:center;width:100%}
 .hero h1{
   font-size:clamp(2.4rem,5vw,3.8rem);
   font-weight:800;letter-spacing:-.03em;
@@ -131,7 +131,7 @@ footer a{color:#444;margin:0 12px}
 /* Responsive */
 @media(max-width:768px){
   nav{padding:20px 24px}
-  .hero .container{grid-template-columns:1fr}
+  .hero .container{text-align:center}
   .features,.investor-grid{grid-template-columns:1fr}
   .steps{grid-template-columns:1fr 1fr}
   .safety-list{columns:1}
