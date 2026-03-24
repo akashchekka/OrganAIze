@@ -25,6 +25,7 @@ IMPORTANT:
 - Think step by step before acting.
 - If you are uncertain, state your confidence level.
 - If you fail at a subtask, report the failure clearly so a specialist can be spawned.
+- START your final output with a concise executive summary (max 400 words) of your key findings and conclusions, followed by supporting details.
 """
 
 SPAWN_ALLOWED_SECTION = """

@@ -57,7 +57,7 @@ ROLE_MODEL_DEFAULTS: dict[str, str] = {
 }
 
 # ── Restricted Tools ────────────────────────────────────────────
-RESTRICTED_TOOLS = {"shell_exec", "file_delete", "network_request_external"}
+RESTRICTED_TOOLS = {"shell_exec", "file_delete", "network_request_external", "code_execute"}
 RESTRICTED_TOOLS_MAX_DEPTH = 1  # Only agents at depth <= this can use restricted tools
 
 def get_llm_kwargs(model: str | None = None) -> dict[str, Any]:

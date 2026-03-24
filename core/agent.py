@@ -70,6 +70,26 @@ async def reason_node(state: AgentState, config: RunnableConfig) -> dict:
         logger.warning("Agent %s hit max steps (%d)", state["agent_name"], state["max_steps"])
         return {"status": "completed", "final_output": f"[MAX_STEPS] Reached {state['max_steps']} steps."}
 
+    # Pre-call budget estimate — skip LLM call if remaining budget is too low
+    remaining = cost_tracker.tokens_remaining
+    if remaining > 0:
+        try:
+            estimated_input = litellm.token_counter(
+                model=state["model"],
+                messages=[_to_litellm_msg(m) for m in state["messages"]],
+            )
+        except Exception:
+            estimated_input = 0
+        if estimated_input > 0 and estimated_input >= remaining:
+            logger.warning(
+                "Agent %s skipped LLM call: estimated input %d >= remaining budget %d",
+                state["agent_name"], estimated_input, remaining,
+            )
+            return {
+                "status": "token_cap_exceeded",
+                "final_output": f"[TOKEN_CAP_EXCEEDED] Estimated input tokens ({estimated_input:,}) exceed remaining budget ({remaining:,})",
+            }
+
     # Rate-limited LLM call
     tools = get_tool_descriptions(state["tools_allowed"])
     async with _llm_semaphore:
@@ -195,7 +215,7 @@ async def _execute_single_tool(tc: dict, state: AgentState, deps: dict) -> dict:
             agent_tools_denied=state["tools_denied"],
             agent_depth=state["depth"],
         )
-    except (ToolDenied, Exception) as e:
+    except Exception as e:
         result = {"tool": tool_name, "error": str(e)}
         logger.error("Tool %s failed for %s: %s", tool_name, state["agent_name"], e)
 
@@ -233,7 +253,7 @@ def should_continue(state: AgentState) -> str:
 
 async def _handle_spawn(args: dict, parent_bp: AgentBlueprint, spawner, deps: dict) -> dict:
     """Spawn a child agent and run its own LangGraph to completion."""
-    child_bp = spawner.spawn(parent_bp, args)
+    child_bp = await spawner.spawn(parent_bp, args)
     if not child_bp:
         logger.info("Spawn denied for parent %s (budget exhausted)", parent_bp.name)
         return {"tool": "spawn_agent", "status": "denied", "reason": "Budget exhausted or global cap reached."}
@@ -249,7 +269,7 @@ async def _handle_spawn(args: dict, parent_bp: AgentBlueprint, spawner, deps: di
         checkpointer=deps.get("checkpointer"),
     )
 
-    summary = child_output[:3000] if len(child_output) <= 3000 else child_output[:3000] + "\n...[truncated]"
+    summary = child_output if len(child_output) <= 3000 else child_output[:3000] + "\n...[truncated]"
     logger.info("Child %s completed (output_len=%d)", child_bp.name, len(child_output))
     return {"tool": "spawn_agent", "status": "completed", "agent_name": child_bp.name, "output": summary}
 
@@ -360,4 +380,5 @@ def _to_litellm_msg(msg: BaseMessage) -> dict:
         return d
     elif isinstance(msg, ToolMessage):
         return {"role": "tool", "tool_call_id": msg.tool_call_id, "content": msg.content}
+    logger.warning("Unknown message type %s, defaulting to 'user' role", type(msg).__name__)
     return {"role": "user", "content": str(msg.content)}

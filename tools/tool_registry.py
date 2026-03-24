@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import json
 import subprocess
+from pathlib import Path
 from typing import Any, Callable, Awaitable
 
-from config import RESTRICTED_TOOLS, RESTRICTED_TOOLS_MAX_DEPTH
+from config import OUTPUT_DIR, RESTRICTED_TOOLS, RESTRICTED_TOOLS_MAX_DEPTH
+
+_WORKSPACE_ROOT = Path(OUTPUT_DIR).resolve().parent
 
 
 class ToolDenied(Exception):
@@ -48,11 +51,21 @@ async def code_execute(args: dict) -> dict:
         return {"tool": "code_execute", "error": "Execution timed out (30s)"}
 
 
+def _is_within_workspace(path: Path) -> bool:
+    """Check that a resolved path is within the workspace root."""
+    try:
+        path.resolve().relative_to(_WORKSPACE_ROOT)
+        return True
+    except ValueError:
+        return False
+
+
 async def file_read(args: dict) -> dict:
     """Read a file from the workspace."""
-    from pathlib import Path
     filepath = args.get("path", "")
     path = Path(filepath)
+    if not _is_within_workspace(path):
+        return {"tool": "file_read", "error": f"Access denied: path outside workspace: {filepath}"}
     if not path.exists():
         return {"tool": "file_read", "error": f"File not found: {filepath}"}
     content = path.read_text(encoding="utf-8", errors="replace")[:10000]
@@ -61,10 +74,11 @@ async def file_read(args: dict) -> dict:
 
 async def file_write(args: dict) -> dict:
     """Write content to a file."""
-    from pathlib import Path
     filepath = args.get("path", "")
     content = args.get("content", "")
     path = Path(filepath)
+    if not _is_within_workspace(path):
+        return {"tool": "file_write", "error": f"Access denied: path outside workspace: {filepath}"}
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
     return {"tool": "file_write", "path": filepath, "bytes_written": len(content)}
