@@ -43,10 +43,6 @@
         <p>Agents spawn sub-agents with depth limits, budget halving, and global caps.</p>
       </div>
       <div class="feature">
-        <h3>Direct Output Flow</h3>
-        <p>Child agents return results directly to their parent via tool messages. No shared memory needed — outputs flow up the tree.</p>
-      </div>
-      <div class="feature">
         <h3>Zero Dependencies</h3>
         <p>No databases. No Redis. No MongoDB. Pure in-memory execution with file-based session output.</p>
       </div>
@@ -103,8 +99,6 @@
       <li>Tool allowlists per agent blueprint. No privilege escalation.</li>
       <li>Session-wide token cap. All agents halt when budget is exhausted.</li>
       <li>Depth limit, budget halving, global agent cap. No runaway spawning.</li>
-      <li>Restricted tools blocked below configurable depth. Defense in depth.</li>
-      <li>State checkpointed at every graph transition via LangGraph MemorySaver.</li>
     </ul>
     </div>
   </div>
